@@ -6,13 +6,29 @@
 #include <utils/array.h>
 #include <math.h>
 
+#ifdef PG_VERSION_NUM
+#if PG_VERSION_NUM >= 160000
+#include <varatt.h>
+#ifndef Abs
+#define Abs(x)  ((x) >= 0 ? (x) : -(x))
+#endif
+#endif
+#endif
+
+
+/*
+ * This file implements NB aggregates function.
+ * They are the equivalent of the functions implemented in cofactor.c
+ */
+
 /*****************************************************************************
  * Input/output functions
  *****************************************************************************/
 
-
+/*
+ *
+ */
 PG_FUNCTION_INFO_V1(read_nb_aggregates);
-
 Datum read_nb_aggregates(PG_FUNCTION_ARGS)
 {
     const char *buf = PG_GETARG_CSTRING(0);
@@ -35,6 +51,7 @@ Datum read_nb_aggregates(PG_FUNCTION_ARGS)
     out->sz_relation_data = tmp.sz_relation_data;
     out->num_continuous_vars = tmp.num_continuous_vars;
     out->num_categorical_vars = tmp.num_categorical_vars;
+    out->aggregate_type = 0;
     out->count = tmp.count;
 
     size_t sz_relation_array = size_relation_array(tmp.num_categorical_vars);
@@ -81,6 +98,7 @@ static cofactor_t *union_cofactors(const cofactor_t *a,
 #ifdef DEBUG_COFACTOR
     assert(a->num_continuous_vars == b->num_continuous_vars &&
            a->num_categorical_vars == b->num_categorical_vars);
+    assert(a->aggregate_type == b->aggregate_type);
 #endif
 
     size_t sz_scalar_array = size_scalar_array(a->num_continuous_vars);
@@ -99,6 +117,7 @@ static cofactor_t *union_cofactors(const cofactor_t *a,
     out->num_continuous_vars = a->num_continuous_vars;
     out->num_categorical_vars = a->num_categorical_vars;
     out->count = a->count + b->count;
+    out->aggregate_type = a->aggregate_type;
 
     // add scalar arrays
     for (size_t i = 0; i < sz_scalar_array; i++)
@@ -144,6 +163,7 @@ static cofactor_t *difference_cofactors(const cofactor_t *a,
 #ifdef DEBUG_COFACTOR
     assert(a->num_continuous_vars == b->num_continuous_vars &&
            a->num_categorical_vars == b->num_categorical_vars);
+        assert(a->aggregate_type == b->aggregate_type);
 #endif
 
     size_t sz_scalar_array = size_scalar_array(a->num_continuous_vars);
@@ -162,8 +182,9 @@ static cofactor_t *difference_cofactors(const cofactor_t *a,
     out->num_continuous_vars = a->num_continuous_vars;
     out->num_categorical_vars = a->num_categorical_vars;
     out->count = a->count - b->count;
+    out->aggregate_type = a->aggregate_type;
 
-    // add scalar arrays
+    // sub scalar arrays
     for (size_t i = 0; i < sz_scalar_array; i++)
     {
         scalar_array(out)[i] = cscalar_array(a)[i] - cscalar_array(b)[i];
@@ -247,6 +268,14 @@ static void multiply_scalar_arrays(const cofactor_t *a, const cofactor_t *b,
     }
 }
 
+/**
+ * Multiplies categorical columns. As the aggregate is simpler in the NB case (SUM(xi)),
+ * All we need to do is to scale the frequency with the cardinality of the other relation
+ * @param a First cofactor
+ * @param b Second cofactor
+ * @param out Output cofactor
+ * @return
+ */
 static size_t multiply_relation_arrays(const cofactor_t *a, const cofactor_t *b,
         /* out */ char *out)
 {
@@ -297,6 +326,7 @@ Datum pg_multiply_nb_aggregates(PG_FUNCTION_ARGS)
     out->num_continuous_vars = a->num_continuous_vars + b->num_continuous_vars;
     out->num_categorical_vars = a->num_categorical_vars + b->num_categorical_vars;
     out->count = a->count * b->count;
+    out->aggregate_type = 0;
 
     // multiply scalar arrays
     multiply_scalar_arrays(a, b, scalar_array(out));
@@ -308,6 +338,7 @@ Datum pg_multiply_nb_aggregates(PG_FUNCTION_ARGS)
 #ifdef DEBUG_COFACTOR
     size_t actual_sz = sizeof_cofactor_t(out);
     assert(actual_sz == sz);
+    assert(a->aggregate_type == b->aggregate_type);
 #endif
 
     PG_RETURN_POINTER(out);
@@ -340,6 +371,7 @@ Datum lift_to_nb_aggregates(PG_FUNCTION_ARGS)
     out->num_continuous_vars = num_cont;
     out->num_categorical_vars = num_cat;
     out->count = 1;
+    out->aggregate_type = 0;
 
     const float8 *cont_values = (float8 *)ARR_DATA_PTR(cont_array);
     float8 *out_scalar_array = scalar_array(out);
@@ -373,7 +405,6 @@ Datum lift_to_nb_aggregates(PG_FUNCTION_ARGS)
             break;
         case 1:
         {
-
             relation_t *r = (relation_t *)out_relation_array;
             r->sz_struct = SIZEOF_RELATION(1);
             r->num_tuples = 1;

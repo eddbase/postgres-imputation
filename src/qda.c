@@ -28,6 +28,13 @@ extern void dscal( int* N, double* DA, double *DX, int* INCX );
 
 PG_FUNCTION_INFO_V1(qda_train);
 
+/**
+ * Train QDA
+ * @param cofactors : sequence of cofactors (generated grouping by label)
+ * @param shrinkage : regularization
+ * @param avoid_collinearity : if not 0, for each categorical column the first value is represented as all 0s rather than introducing a column
+ * @return QDA parameters
+ */
 Datum qda_train(PG_FUNCTION_ARGS)
 {
     ArrayType *cofactors = PG_GETARG_ARRAYTYPE_P(0);
@@ -43,30 +50,21 @@ Datum qda_train(PG_FUNCTION_ARGS)
     deconstruct_array(cofactors, arrayElementType1, arrayElementTypeWidth1, arrayElementTypeByValue1, arrayElementTypeAlignmentCode1,
                       &arrayContent1, &arrayNullFlags1, &n_aggregates);
 
-    cofactor_t **aggregates = (cofactor_t **)palloc0(sizeof(cofactor_t *) * n_aggregates);
-    elog(WARNING, "a");
+    const cofactor_t **aggregates = (const cofactor_t **)palloc0(sizeof(cofactor_t *) * n_aggregates);
     for(size_t i=0; i<n_aggregates; i++) {
         aggregates[i] = (cofactor_t *) DatumGetPointer(arrayContent1[i]);
     }
 
     double shrinkage = PG_GETARG_FLOAT8(1);
+    int drop_first = PG_GETARG_INT64(2);
 
     uint32_t *cat_idxs = NULL;
     uint64_t *cat_array = NULL;
-    elog(WARNING, "b");
-    int drop_first = 1;
-    size_t num_params = n_cols_1hot_expansion(aggregates, n_aggregates, &cat_idxs, &cat_array, 1, drop_first);//enable drop first
+    size_t num_params = n_cols_1hot_expansion(aggregates, n_aggregates, &cat_idxs, &cat_array, drop_first);//enable drop first
     size_t num_categories = cat_idxs[aggregates[0]->num_categorical_vars];
-    for(size_t i=0; i<aggregates[0]->num_categorical_vars+1; i++){
-        elog(WARNING, "cat_idxs %d", cat_idxs[i]);
-    }
-    for(size_t i=0; i<cat_idxs[aggregates[0]->num_categorical_vars]; i++){
-        elog(WARNING, "cat_array %d", cat_array[i]);
-    }
 
     float8 *sigma_matrix = (float8 *)palloc0(sizeof(float8) * num_params * num_params);
     double *sum_vector = (double *)palloc0(sizeof(double) * num_params);
-    //double *coef = (double *)palloc0(sizeof(double) * num_params * num_categories);//from mean to coeff
 
     int m = num_params-1;
     double *sing_values = (double*)palloc(m*sizeof(double));
@@ -85,6 +83,7 @@ Datum qda_train(PG_FUNCTION_ARGS)
 
     size_t param_out_index = 2;
 
+    //save categorical (unique) values and begin:end indices in output
     if (aggregates[0]->num_categorical_vars > 0) {
         result[1] = Float4GetDatum(aggregates[0]->num_categorical_vars + 1);
         for(size_t i=0; i<aggregates[0]->num_categorical_vars+1; i++)
@@ -98,15 +97,12 @@ Datum qda_train(PG_FUNCTION_ARGS)
     else
         result[1] = Float4GetDatum(0);
 
-    elog(WARNING, "d");
     double tot_tuples = 0;
     for(size_t i=0; i<n_aggregates; i++){
         tot_tuples += aggregates[i]->count;
     }
-    elog(WARNING, "e");
 
     for(size_t i=0; i<n_aggregates; i++) {
-        elog(WARNING, "starting sigma");
 
         for (size_t j = 0; j < num_params; j++) {
             sum_vector[j] = 0;
@@ -115,27 +111,18 @@ Datum qda_train(PG_FUNCTION_ARGS)
         }
 
         build_sigma_matrix(aggregates[i], num_params, -1, cat_array, cat_idxs, drop_first, sigma_matrix);
-        elog(WARNING, "done sigma");
         build_sum_vector(aggregates[i], num_params, cat_array, cat_idxs, drop_first, sum_vector);
-        elog(WARNING, "done sum");
 
-        for (size_t j = 1; j < num_params; j++) {
-                elog(WARNING, "sum vector: %lf", sum_vector[j]);
-        }
 
-                //generate covariance matrix
+        //generate covariance matrix (for each class)
         for (size_t j = 1; j < num_params; j++) {
             for (size_t k = 1; k < num_params; k++) {
-                elog(WARNING, "sigma matrix row: %d col: %d val: %lf", j-1, k-1, sigma_matrix[((j) * (num_params)) + (k)]);
                 sigma_matrix[((j-1) * (num_params-1)) + (k-1)] = (sigma_matrix[(j * num_params) + k] - ((float8)(sum_vector[j] * sum_vector[k]) / (float8) sum_vector[0])) / (float8) sum_vector[0];
-                //sigma_matrix[(j * num_params) + k] /= (float8) sum_vector[0];
-                elog(WARNING, "covariance row: %d col: %d val: %lf", j-1, k-1, sigma_matrix[((j-1) * (num_params-1)) + (k-1)]);
             }
             mean_vector[j-1] = sum_vector[j]/sum_vector[0];
         }
-        elog(WARNING, "f");
 
-        //invert the matrix. We can also use LU decomposition which is faster but less stable
+        //invert the matrix with SVD. We can also use LU decomposition might be is faster but less stable
         int lwork = -1;
         double wkopt;
         int info;
@@ -146,16 +133,12 @@ Datum qda_train(PG_FUNCTION_ARGS)
         dgesvd( "S", "S", &m, &m, sigma_matrix, &m, sing_values, u, &m, vt, &m, work, &lwork, &info );
         /* Check for convergence */
         if( info > 0 ) {
-            elog(WARNING, "The algorithm computing SVD failed to converge." );
+            elog(ERROR, "The algorithm computing SVD failed to converge." );
         }
         //we computed SVD, now calculate u=Σ-1U, where Σ is diagonal, so compute by a loop of calling BLAS ?scal function for computing product of a vector by a scalar
         //u is stored column-wise, and vt is row-wise here, thus the formula should be like u=UΣ-1
         double rcond = (1.0e-15);//Cutoff for small singular values. Singular values less than or equal to rcond * largest_singular_value are set to zero
-        //todoc consider using syevd for SVD. For positive semi-definite matrices (like covariance) SVD and eigenvalue decomp. are the same
-        /*for(int i=0; i<m; i++){
-            if (sing_values[i] <= sing_values[0]*rcond)
-                sing_values[i] = 0;
-        }*/
+        //consider using syevd for SVD. For positive semi-definite matrices (like covariance) SVD and eigenvalue decomp. are the same
 
         int incx = 1;
         for(int i=0; i<m; i++)
@@ -171,19 +154,19 @@ Datum qda_train(PG_FUNCTION_ARGS)
         for(int i=0; i<m; i++)
             determinant *= sing_values[i];
 
-        elog(WARNING, "determinant %lf", determinant);
+        //elog(WARNING, "determinant %lf", determinant);
         //calculate A+=(V*)TuT, use MKL ?GEMM function to calculate matrix multiplication
         double alpha=1.0, beta=0.0;
         dgemm( "T", "T", &m, &m, &m, &alpha, vt, &m, u, &m, &beta, inva, &m);
-        elog(WARNING, "g");
+        //elog(WARNING, "g");
 
-        //I have the inverse
+        //I have the inverse, save it in output
         for(int i=0; i<m; i++){
             for(int j=0; j<m; j++){
                 result[param_out_index+(i*m)+j] = Float4GetDatum((float) -1* inva[(i*m)+j]/2);
             }
         }
-        elog(WARNING, "h");
+        //elog(WARNING, "h");
         param_out_index += (m*m);
         //compute product with mean
         char task = 'N';
@@ -191,30 +174,37 @@ Datum qda_train(PG_FUNCTION_ARGS)
 
         dgemv(&task, &m, &m, &alpha, inva, &m, mean_vector, &increment, &beta, lin_result, &increment);
         for(int j=0; j<m; j++){
-            elog(WARNING, "mean %lf", mean_vector[j]);
+            //elog(WARNING, "mean %lf", mean_vector[j]);
             result[param_out_index+j] = Float4GetDatum((float) lin_result[j]);
         }
-        elog(WARNING, "i");
+        //elog(WARNING, "i");
 
         param_out_index += m;
         int row=1;
         double intercept = 0;
         dgemv(&task, &row, &m, &alpha, mean_vector, &row, lin_result, &increment, &beta, &intercept, &increment);
-        elog(WARNING, "intercept 1 %lf", (intercept));
+        /*elog(WARNING, "intercept 1 %lf", (intercept));
         for(int i=0; i<m; i++)
-            elog(WARNING, " %lf * %lf", mean_vector[i], lin_result[i]);
+            elog(WARNING, " %lf * %lf", mean_vector[i], lin_result[i]);*/
         intercept = ((-1)*intercept/(double)2) - (log(determinant)/(double)2) + log(sum_vector[0]/(double)tot_tuples);
-        elog(WARNING, "intercept 1 %lf", (log(determinant)/(double)2));
-        elog(WARNING, "intercept 1 %lf", log(sum_vector[0]/(double)tot_tuples));
+        //elog(WARNING, "intercept 1 %lf", (log(determinant)/(double)2));
+        //elog(WARNING, "intercept 1 %lf", log(sum_vector[0]/(double)tot_tuples));
         result[param_out_index] = Float4GetDatum((float) intercept);
         param_out_index++;
-        elog(WARNING, "l");
+        //elog(WARNING, "l");
     }
 
     ArrayType *a = construct_array(result, res_size, FLOAT4OID, sizeof(float4), true, TYPALIGN_INT);
     PG_RETURN_ARRAYTYPE_P(a);
 }
 
+/**
+ * Generates prediction using QDA
+ * @param fcinfo Parameters
+ * @param fcinfo numerical features
+ * @param fcinfo categorical features
+ * @return
+ */
 PG_FUNCTION_INFO_V1(qda_predict);
 Datum qda_predict(PG_FUNCTION_ARGS)
 {
@@ -255,9 +245,10 @@ Datum qda_predict(PG_FUNCTION_ARGS)
     int one_hot_size = 0;
     uint64_t *cat_vars_idxs;
     uint64_t *cat_vars;
-    elog(WARNING, "c");
+    //elog(WARNING, "c");
     size_t k=2;
 
+    //extract categorical values and indices
     if (size_idxs > 0) {
         cat_vars_idxs = (uint64_t *) palloc0(sizeof(uint64_t) * (size_idxs));//max. size
         for (size_t i = 0; i < size_idxs; i++)
@@ -268,24 +259,14 @@ Datum qda_predict(PG_FUNCTION_ARGS)
         for (size_t i = 0; i < cat_vars_idxs[size_idxs - 1]; i++)
             cat_vars[i] = DatumGetFloat4(arrayContent1[i + 2 + size_idxs]);
 
-        for (size_t i = 0; i < size_idxs; i++) {
-            elog(WARNING, "n_feats_cat_idxs %zu", cat_vars_idxs[i]);
-        }
-        for (size_t i = 0; i < cat_vars_idxs[size_idxs - 1]; i++) {
-            elog(WARNING, "cat. feats. %zu", cat_vars[i]);
-        }
         k=2+cat_vars_idxs[size_idxs-1]+size_idxs;
     }
 
-    elog(WARNING, "d");
-
-    /////
     size_t n_params = one_hot_size + arrayLength2;
     double *features = (double *)palloc0(sizeof(double) * (n_params));
     double *quad_matrix = (double *)palloc0(sizeof(double) * (n_params*n_params));
     double *lin_matrix = (double *)palloc0(sizeof(double) * (n_params*n_params));
     double *res_matmul = (double *)palloc0(sizeof(double) * (n_params));
-    elog(WARNING, "e");
 
     int m = n_params;
 
@@ -293,22 +274,19 @@ Datum qda_predict(PG_FUNCTION_ARGS)
     for(int i=0; i<arrayLength2; i++)
         features[i] = DatumGetFloat4(arrayContent2[i]);
 
-    for(int i=0; i<arrayLength3; i++){//categorical feats
+    for(int i=0; i<arrayLength3; i++){//categorical feats (builds 1-hot encoded vector)
         int class = DatumGetInt64(arrayContent3[i]);
         size_t index = find_in_array(class, cat_vars, cat_vars_idxs[i], cat_vars_idxs[i+1]);
-        elog(WARNING, "1-hot class %d -> index %d (from %d to %d)", class, index, cat_vars_idxs[i], cat_vars_idxs[i+1]);
+        //elog(WARNING, "1-hot class %d -> index %d (from %d to %d)", class, index, cat_vars_idxs[i], cat_vars_idxs[i+1]);
         if (index < cat_vars_idxs[i+1])
             features[index+arrayLength2] = 1;
     }
 
-    for(int i=0; i<n_params; i++){
-        elog(WARNING, "feats %lf", features[i]);
-    }
 
     int best_class = 0;
     double max_prob = -DBL_MAX;
     for(size_t i=0; i<n_classes; i++){
-        //copy features
+        //copy qda params
         for(size_t j=0; j<n_params*n_params; j++){
             quad_matrix[j] = DatumGetFloat4(arrayContent1[j + k]);
         }
@@ -319,7 +297,8 @@ Datum qda_predict(PG_FUNCTION_ARGS)
         k += (n_params);
         double intercept = DatumGetFloat4(arrayContent1[k]);
         k++;
-        elog(WARNING, "g");
+
+        //compute probability of given class with matrix multiplication
 
         char task = 'N';
         int increment = 1;
@@ -334,7 +313,7 @@ Datum qda_predict(PG_FUNCTION_ARGS)
         dgemv(&task, &row, &m, &alpha, lin_matrix, &m, features, &increment, &beta, &res_prob_2, &increment);
 
         double total_prob = intercept + res_prob_1 + res_prob_2;
-        elog(WARNING, "prob: %lf", total_prob);
+        //elog(WARNING, "prob: %lf", total_prob);
 
         if (total_prob > max_prob){
             max_prob = total_prob;

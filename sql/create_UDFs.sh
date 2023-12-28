@@ -18,5 +18,7 @@ else
     psql -f $SCRIPT_DIR/create_cofactor_type.sql -v FACTML_LIBRARY=\'$SHARED_FILE\' postgres
 
     echo "Creating ML functions..."
+    psql -f $SCRIPT_DIR/create_ML_base.sql -v FACTML_LIBRARY=\'$SHARED_FILE\' postgres
     psql -f $SCRIPT_DIR/create_ML.sql -v FACTML_LIBRARY=\'$SHARED_FILE\' postgres
+
 fi

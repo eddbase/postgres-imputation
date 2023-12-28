@@ -1,55 +1,75 @@
 #include <datatype.h>
 #include <relation.h>
 
-static inline size_t size_scalar_array(size_t num_cont, int is_cofactor)
+/**
+ * Compute size of scalar values
+ * @param num_cont number of columns in the table
+ * @param is_cofactor if true, contains LDA/QDA/LR aggregates, otherwise Naive Bayes aggregates
+ * @return
+ */
+static inline size_t size_scalar_array(size_t num_cont, uint16_t is_cofactor)
 {
-    // num_cont * (num_cont + 3) / 2
     if (is_cofactor){
-        //elog(WARNING, "IS COFACTOR ");
         return (num_cont *(num_cont+ 3)) >> 1;
     }
     return num_cont * 2;
 }
 
-static inline char *relation_array(cofactor_t *c, int is_cofactor)
+/**
+ * Returns pointer to categorical values
+ * @param c input aggregate
+ * @return pointer to categorical values
+ */
+
+static inline char *relation_array(cofactor_t *c)
 {
-    return (char *)(scalar_array(c) + size_scalar_array(c->num_continuous_vars, is_cofactor));
+    return (char *)(scalar_array(c) + size_scalar_array(c->num_continuous_vars, c->aggregate_type));
 }
 
-static inline const char *crelation_array(const cofactor_t *c, int is_cofactor)
+/**
+ * Returns pointer to categorical values
+ * @param c input aggregate
+ * @return pointer to categorical values
+ */
+static inline const char *crelation_array(const cofactor_t *c)
 {
-    return (const char *)(cscalar_array(c) + size_scalar_array(c->num_continuous_vars, is_cofactor));
+    return (const char *)(cscalar_array(c) + size_scalar_array(c->num_continuous_vars, c->aggregate_type));
 }
 
-size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, uint32_t **cat_idxs, uint64_t **cat_unique_array, int is_cofactor, int drop_first)
+/**
+ * Computes the n. of columns of a cofactor matrix 1-hot encoded from a sequence of aggregates
+ * @param cofactors input aggregates ()
+ * @param n_aggregates n. of group by aggregates
+ * @param cat_idxs OUTPUT: Indices of cat_unique_array. For each column stores begin:end of cat. values inside cat_unique_array
+ * @param cat_unique_array OUTPUT: for every categorical column, stores sorted categorical values
+ * @param drop_first If true, remove first entry for each categorical attribute (avoids multicollinearity in case of QDA)
+ * @return number of values in a 1-hot encoded vector given the aggregates
+ */
+size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, uint32_t **cat_idxs, uint64_t **cat_unique_array, int drop_first)
 {
     size_t num_categories = 0;
     for(size_t k=0; k<n_aggregates; k++) {
-        num_categories += get_num_categories(crelation_array(cofactors[k], is_cofactor), cofactors[k]->num_categorical_vars, -1);//potentially overestimate
+        num_categories += get_num_categories(crelation_array(cofactors[k]), cofactors[k]->num_categorical_vars, -1);//potentially overestimate
     }
-    //elog(WARNING, "1 %d %d", cofactors[0]->num_categorical_vars + 1, num_categories);
+
     uint32_t *cat_vars_idxs = (uint32_t *)palloc0(sizeof(uint32_t) * (cofactors[0]->num_categorical_vars + 1)); // track start each cat. variable
     uint64_t *cat_array = (uint64_t *)palloc0(sizeof(uint64_t) * num_categories);//max. size
 
     (*cat_idxs) = cat_vars_idxs;
     (*cat_unique_array) = cat_array;
-    //elog(WARNING, "2");
 
     cat_vars_idxs[0] = 0;
     size_t search_start = 0;        // within one category class
     size_t search_end = search_start;
-    //elog(WARNING, "3");
 
-    char **relation_scan = (char **)palloc0(sizeof(char *) * n_aggregates); // track start each cat. variable
+    const char **relation_scan = (const char **)palloc0(sizeof(char *) * n_aggregates); // track start each cat. variable
     for(size_t k=0; k<n_aggregates; k++) {
-        relation_scan[k] = relation_array(cofactors[k], is_cofactor);
+        relation_scan[k] = crelation_array(cofactors[k]);
     }
-    //elog(WARNING, "4");
 
     for (size_t i = 0; i < cofactors[0]->num_categorical_vars; i++) {
         for(size_t k=0; k<n_aggregates; k++) {
             relation_t *r = (relation_t *) relation_scan[k];
-            //elog(WARNING, "5");
             //create sorted array
             for (size_t j = 0; j < r->num_tuples; j++) {
                 size_t key_index = find_in_array(r->tuples[j].key, cat_array, search_start, search_end);
@@ -72,9 +92,8 @@ size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, 
         cat_vars_idxs[i + 1] = cat_vars_idxs[i] + (search_end - search_start);
         search_start = search_end;
     }
-    //elog(WARNING, "6");
 
-    if (drop_first){//remove first entry for each categorical attribute (avoids multicollinearity)
+    if (drop_first){//remove first entry for each categorical attribute (avoids multicollinearity when inverting matrix in QDA)
         for (size_t i = 0; i < cofactors[0]->num_categorical_vars; i++){
             cat_vars_idxs[i+1]-= (i+1);
             for(size_t j=cat_vars_idxs[i]; j<cat_vars_idxs[i+1]; j++){
@@ -83,19 +102,24 @@ size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, 
         }
     }
 
-    // count :: numerical :: 1-hot_categories
+    // count + numerical + 1-hot_categories
     return 1 + cofactors[0]->num_continuous_vars + cat_vars_idxs[cofactors[0]->num_categorical_vars];
 }
 
-// number of categories in relations formed for group by A, group by B, ...
-// assumption: relations contain distinct tuples
+
+/**
+ * Computes the n. of columns of a cofactor matrix 1-hot encoded given a relation. Assumption: relations contain distinct tuples
+ * @param relation_data_o input relation
+ * @param num_categorical_vars number of categorical columns
+ * @param label_categorical_sigma if >= 0, do not count categorical values in 'label_categorical_sigma' column
+ * @return n. of columns of a cofactor matrix 1-hot encoded
+ */
 size_t get_num_categories(const char *relation_data_o, size_t num_categorical_vars, int label_categorical_sigma)
 {
     size_t num_categories = 0;
     const char *relation_data = relation_data_o;
     for (size_t i = 0; i < num_categorical_vars; i++)
     {
-        //elog(WARNING, "NUM_CAT_VARS %d", i);
         relation_t *r = (relation_t *) relation_data;
 
         if (label_categorical_sigma >= 0 && ((size_t)label_categorical_sigma) == i)
@@ -104,13 +128,20 @@ size_t get_num_categories(const char *relation_data_o, size_t num_categorical_va
             relation_data += r->sz_struct;
             continue;
         }
-        //elog(WARNING, "num_tuples %lu", r->num_tuples);
         num_categories += r->num_tuples;
         relation_data += r->sz_struct;
     }
     return num_categories;
 }
 
+/**
+ * Find element in array
+ * @param a element
+ * @param array array
+ * @param start start searching from this index
+ * @param end end searching at this index
+ * @return index of element or end if element is not in the array
+ */
 size_t find_in_array(uint64_t a, const uint64_t *array, size_t start, size_t end)
 {
     size_t index = start;

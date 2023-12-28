@@ -4,6 +4,16 @@
 #include <catalog/pg_type.h>
 #include <fmgr.h>
 
+#ifdef PG_VERSION_NUM
+#if PG_VERSION_NUM >= 160000
+#include <varatt.h>
+#ifndef Abs
+#define Abs(x)  ((x) >= 0 ? (x) : -(x))
+#endif
+#endif
+#endif
+
+
 PG_MODULE_MAGIC;
 
 /*****************************************************************************
@@ -168,7 +178,7 @@ void add_relations(const relation_t *r, const relation_t *s,
 
 //
 // Subtract relations with compaction; equivalent to add_relations(r, -s, out)
-//
+//Used in both cofactor and NB aggregates
 void subtract_relations(const relation_t *r, const relation_t *s,
         /* out */ relation_t *out)
 {

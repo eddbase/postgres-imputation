@@ -4,6 +4,10 @@
 #include <postgres.h>
 #include <assert.h>
 
+/*
+ * Aggregates for LDA/QDA. They use the same aggregates: SUM(xi*xj) for each pair of columns
+ */
+
 typedef struct
 {
     union

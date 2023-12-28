@@ -103,8 +103,17 @@ inline double compute_step_size(double step_size, int num_params,
     return (Tm / Ts > 0.5) ? Tm : Ts - 0.5 * Tm;
 }
 
+/**
+ * Implements linear regression in PostgreSQL
+ * @param cofactor input aggregates
+ * @param label label column position
+ * @param step_size learning rate
+ * @param lambda regularization value
+ * @param max_num_iterations max. num. of learning iterations
+ * @param compute_variance if 0, does not compute variance, otherwise last parameter returned is variance
+ * @return learned parameters
+ */
 PG_FUNCTION_INFO_V1(ridge_linear_regression);
-
 Datum ridge_linear_regression(PG_FUNCTION_ARGS)
 {
     const cofactor_t *cofactor = (const cofactor_t *)PG_GETARG_VARLENA_P(0);
@@ -115,16 +124,16 @@ Datum ridge_linear_regression(PG_FUNCTION_ARGS)
     int compute_variance = PG_GETARG_INT64(5);
 
     if (cofactor->num_continuous_vars <= label) {
-        elog(WARNING, "label ID >= number of continuous attributes");
+        elog(ERROR, "label ID >= number of continuous attributes");
         PG_RETURN_NULL();
     }
 
     //size_t num_params = sizeof_sigma_matrix(cofactor, -1);
     uint64_t *cat_array = NULL;
     uint32_t *cat_vars_idxs = NULL;
-    size_t num_params = n_cols_1hot_expansion(&cofactor, 1, &cat_vars_idxs, &cat_array, 1, 0);//tot columns include label as well, so not used here
+    size_t num_params = n_cols_1hot_expansion(&cofactor, 1, &cat_vars_idxs, &cat_array, 0);//tot columns include label as well, so not used here
 
-    elog(DEBUG5, "num_params = %zu", num_params);
+    //elog(DEBUG5, "num_params = %zu", num_params);
 
     double *grad = (double *)palloc0(sizeof(double) * num_params);
     double *prev_grad = (double *)palloc0(sizeof(double) * num_params);
@@ -272,9 +281,12 @@ Datum ridge_linear_regression(PG_FUNCTION_ARGS)
 }
 
 
-
+/**
+ * Given parameters, train a linear regression
+ * @param fcinfo
+ * @return
+ */
 PG_FUNCTION_INFO_V1(ridge_linear_regression_from_params);
-
 Datum ridge_linear_regression_from_params(PG_FUNCTION_ARGS)
 {
     ArrayType *cofactor_vals = PG_GETARG_ARRAYTYPE_P(0);
@@ -297,7 +309,7 @@ Datum ridge_linear_regression_from_params(PG_FUNCTION_ARGS)
 
     int num_params = (-1 + sqrt(1+(4*arrayLength1)))/2;
 
-    elog(DEBUG5, "num_params = %zu", num_params);
+    //elog(DEBUG5, "num_params = %zu", num_params);
 
     double *grad = (double *)palloc0(sizeof(double) * num_params);
     double *prev_grad = (double *)palloc0(sizeof(double) * num_params);
@@ -415,20 +427,12 @@ Datum ridge_linear_regression_from_params(PG_FUNCTION_ARGS)
         d[i] = Float8GetDatum(learned_coeff[i]);
         elog(DEBUG2, "learned_coeff[%d] = %f", i, learned_coeff[i]);
     }
-    elog(DEBUG3, "returning...");
     pfree(grad);
-    elog(DEBUG3, "areturning...");
     pfree(prev_grad);
-    elog(DEBUG3, "breturning...");
     pfree(learned_coeff);
-    elog(DEBUG3, "creturning...");
     pfree(prev_learned_coeff);
-    elog(DEBUG3, "dreturning...");
     pfree(sigma);
-    elog(DEBUG3, "ereturning...");
     //pfree(update);
-    elog(DEBUG3, "freturning...");
-
     ArrayType *a = construct_array(d, num_params, FLOAT8OID, sizeof(float8), true, 'd');
     PG_RETURN_ARRAYTYPE_P(a);
 }
