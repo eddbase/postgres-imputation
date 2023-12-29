@@ -954,6 +954,28 @@ void build_sum_matrix(const cofactor_t *cofactor, size_t num_total_params, int l
     }
 }
 
+
+void standardize(double *sigma, size_t num_params, double *means, double *std){
+    //compute mean and variance of every column
+    //and standardize the data
+    for(size_t i=0; i<num_params; i++)
+        means[i] = sigma[i] / sigma[0];
+    for(size_t i=0; i<num_params; i++)
+        std[i] = sqrt((sigma[(i*num_params)+i]/sigma[0]) - pow(sigma[i]/sigma[0], 2));//0 variance for first col
+
+    //standardize sigma matrix
+    for(size_t i=1; i<num_params; i++){
+        for (size_t j=1; j<num_params; j++){
+            sigma[(i*num_params)+j] = (sigma[(i*num_params)+j] - (means[i]*sigma[j]) - (means[j]*sigma[i]) + (sigma[0]*means[j]*means[i])) / (std[i]*std[j]);
+        }
+    }
+    //standarize sums. Sum of standardized values is 0 (and avoid division by 0)
+    for(size_t i=1; i<num_params; i++){
+        sigma[i] = 0;
+        sigma[(i*num_params)] = 0;
+    }
+}
+
 //
 //if label_categorical_sigma >=0, removes the label_categorical_sigma-th variable (target) from the cofactor matrix (mainly lda/lr)
 

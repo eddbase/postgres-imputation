@@ -60,15 +60,15 @@ Datum naive_bayes_train(PG_FUNCTION_ARGS)
                                         +(cat_vars_idxs[aggregates[0]->num_categorical_vars]*n_aggregates)//categoricals
                                         +aggregates[0]->num_categorical_vars + 1 //cat. vars. idxs
                                         +n_aggregates + 1 + 1 + cat_vars_idxs[aggregates[0]->num_categorical_vars]));
-    result[0] = Float4GetDatum(n_aggregates);
-    result[1] = Float4GetDatum(aggregates[0]->num_categorical_vars+1);
+    result[0] = Float8GetDatum(n_aggregates);
+    result[1] = Float8GetDatum(aggregates[0]->num_categorical_vars+1);
 
     //stores here cat_vars_idxs and cat_array. Label is not part of the columns
     for(size_t i=0; i<aggregates[0]->num_categorical_vars + 1; i++)
-        result[i+2] = Float4GetDatum(cat_vars_idxs[i]);
+        result[i+2] = Float8GetDatum(cat_vars_idxs[i]);
 
     for(size_t i=0; i<cat_vars_idxs[aggregates[0]->num_categorical_vars]; i++)
-        result[i+2+aggregates[0]->num_categorical_vars+1] = Float4GetDatum(cat_array[i]);
+        result[i+2+aggregates[0]->num_categorical_vars+1] = Float8GetDatum(cat_array[i]);
 
     //start storing NB parameters
 
@@ -77,13 +77,13 @@ Datum naive_bayes_train(PG_FUNCTION_ARGS)
         //save here the frequency for categorical NB
         //these are the first NB parameters stored
 
-        result[i+2+cat_vars_idxs[aggregates[0]->num_categorical_vars]+aggregates[0]->num_categorical_vars+1] = Float4GetDatum(aggregates[i]->count / total_tuples);
+        result[i+2+cat_vars_idxs[aggregates[0]->num_categorical_vars]+aggregates[0]->num_categorical_vars+1] = Float8GetDatum(aggregates[i]->count / total_tuples);
 
         for (size_t j=0; j<aggregates[i]->num_continuous_vars; j++){//save numeric params (mean, variance) after n_aggregates values
             float mean = (float)cscalar_array(aggregates[i])[j] / (float)aggregates[i]->count;
             float variance = ((float)cscalar_array(aggregates[i])[j + aggregates[i]->num_continuous_vars] / (float)aggregates[i]->count) - (mean * mean);
-            result[k] = Float4GetDatum(mean);
-            result[k+1] = Float4GetDatum(variance);
+            result[k] = Float8GetDatum(mean);
+            result[k+1] = Float8GetDatum(variance);
             k+=2;
         }
         k += cat_vars_idxs[aggregates[0]->num_categorical_vars];
@@ -96,14 +96,14 @@ Datum naive_bayes_train(PG_FUNCTION_ARGS)
             relation_t *r = (relation_t *) relation_data;
             for (size_t l = 0; l < r->num_tuples; l++) {
                 size_t index = find_in_array(r->tuples[l].key, cat_array, cat_vars_idxs[j], cat_vars_idxs[j+1]);
-                result[index + k] = Float4GetDatum((float) r->tuples[l].value / (float) aggregates[i]->count);//after mean and variance stores prior for num. columns
+                result[index + k] = Float8GetDatum((float) r->tuples[l].value / (float) aggregates[i]->count);//after mean and variance stores prior for num. columns
             }
             relation_data += r->sz_struct;
         }
         k += cat_vars_idxs[aggregates[i]->num_categorical_vars] + (aggregates[i]->num_continuous_vars*2);
     }
 
-    ArrayType *a = construct_array(result, ((2*aggregates[0]->num_continuous_vars*n_aggregates)+(cat_vars_idxs[aggregates[0]->num_categorical_vars]*n_aggregates)+n_aggregates+1+ 1 + cat_vars_idxs[aggregates[0]->num_categorical_vars] + aggregates[0]->num_categorical_vars + 1), FLOAT4OID, sizeof(float4), true, TYPALIGN_INT);
+    ArrayType *a = construct_array(result, ((2*aggregates[0]->num_continuous_vars*n_aggregates)+(cat_vars_idxs[aggregates[0]->num_categorical_vars]*n_aggregates)+n_aggregates+1+ 1 + cat_vars_idxs[aggregates[0]->num_categorical_vars] + aggregates[0]->num_categorical_vars + 1), FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
     PG_RETURN_ARRAYTYPE_P(a);
 }
 
@@ -141,8 +141,8 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
     deconstruct_array(features_cat, arrayElementType3, arrayElementTypeWidth3, arrayElementTypeByValue3, arrayElementTypeAlignmentCode3,
                       &arrayContent3, &arrayNullFlags3, &n_feats_cat);
 
-    int n_classes = DatumGetFloat4(arrayContent1[0]);
-    int size_idxs = DatumGetFloat4(arrayContent1[1]);
+    int n_classes = DatumGetFloat8(arrayContent1[0]);
+    int size_idxs = DatumGetFloat8(arrayContent1[1]);
     size_t k=2+n_classes;//2+priors
     size_t prior_offset = 2;
     uint64_t *cat_vars_idxs;
@@ -151,11 +151,11 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
     if(size_idxs > 0) {
         cat_vars_idxs = (uint64_t *) palloc0(sizeof(uint64_t) * (size_idxs));//max. size
         for (size_t i = 0; i < size_idxs; i++)
-            cat_vars_idxs[i] = DatumGetFloat4(arrayContent1[i + 2]);
+            cat_vars_idxs[i] = DatumGetFloat8(arrayContent1[i + 2]);
 
         cat_vars = (uint64_t *) palloc(sizeof(uint64_t) * cat_vars_idxs[size_idxs - 1]);//max. size
         for (size_t i = 0; i < cat_vars_idxs[size_idxs - 1]; i++)
-            cat_vars[i] = DatumGetFloat4(arrayContent1[i + 2 + size_idxs]);
+            cat_vars[i] = DatumGetFloat8(arrayContent1[i + 2 + size_idxs]);
 
         /*
         for (size_t i = 0; i < size_idxs; i++) {
@@ -172,14 +172,14 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
     int best_class = 0;
     double max_prob = 0;
     for(size_t i=0; i<n_classes; i++){
-        double total_prob = DatumGetFloat4(arrayContent1[prior_offset+i]);
+        double total_prob = DatumGetFloat8(arrayContent1[prior_offset+i]);
         //elog(WARNING, "total prob %f", total_prob);
 
         for(size_t j=0; j<n_feats_cont; j++){
-            double variance = DatumGetFloat4(arrayContent1[k+(j*2)+1]);
+            double variance = DatumGetFloat8(arrayContent1[k+(j*2)+1]);
             variance += 0.000000001;//avoid division by 0
-            double mean = DatumGetFloat4(arrayContent1[k+(j*2)]);
-            total_prob *= ((double)1 / sqrt(2*M_PI*variance)) * exp( -(pow((DatumGetFloat4(arrayContent2[j]) - mean), 2)) / ((double)2*variance));
+            double mean = DatumGetFloat8(arrayContent1[k+(j*2)]);
+            total_prob *= ((double)1 / sqrt(2*M_PI*variance)) * exp( -(pow((DatumGetFloat8(arrayContent2[j]) - mean), 2)) / ((double)2*variance));
             //elog(WARNING, "total prob %f (normal mean %lf var %lf)", total_prob, mean, variance);
         }
 
@@ -192,7 +192,7 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
                 if (index == cat_vars_idxs[j + 1])//class not found in train dataset
                     total_prob *= 0;
                 else {
-                    total_prob *= DatumGetFloat4(
+                    total_prob *= DatumGetFloat8(
                             arrayContent1[k + index]);//cat. feats need to be monot. increasing
                     //elog(WARNING, "multiply %lf", DatumGetFloat4(arrayContent1[k + index]));
                     //elog(WARNING, "total prob %lf", total_prob);

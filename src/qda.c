@@ -79,23 +79,23 @@ Datum qda_train(PG_FUNCTION_ARGS)
         res_size += aggregates[0]->num_categorical_vars+1 + cat_idxs[aggregates[0]->num_categorical_vars];
     }
     Datum *result = (Datum *)palloc(sizeof(Datum) * res_size);
-    result[0] = Float4GetDatum(n_aggregates);
+    result[0] = Float8GetDatum(n_aggregates);
 
     size_t param_out_index = 2;
 
     //save categorical (unique) values and begin:end indices in output
     if (aggregates[0]->num_categorical_vars > 0) {
-        result[1] = Float4GetDatum(aggregates[0]->num_categorical_vars + 1);
+        result[1] = Float8GetDatum(aggregates[0]->num_categorical_vars + 1);
         for(size_t i=0; i<aggregates[0]->num_categorical_vars+1; i++)
-            result[i+2] = Float4GetDatum(cat_idxs[i]);
+            result[i+2] = Float8GetDatum(cat_idxs[i]);
 
         param_out_index = aggregates[0]->num_categorical_vars+3;
         for(size_t i=0; i<cat_idxs[aggregates[0]->num_categorical_vars]; i++)
-            result[param_out_index+i] = Float4GetDatum(cat_array[i]);
+            result[param_out_index+i] = Float8GetDatum(cat_array[i]);
         param_out_index += cat_idxs[aggregates[0]->num_categorical_vars];
     }
     else
-        result[1] = Float4GetDatum(0);
+        result[1] = Float8GetDatum(0);
 
     double tot_tuples = 0;
     for(size_t i=0; i<n_aggregates; i++){
@@ -163,7 +163,7 @@ Datum qda_train(PG_FUNCTION_ARGS)
         //I have the inverse, save it in output
         for(int i=0; i<m; i++){
             for(int j=0; j<m; j++){
-                result[param_out_index+(i*m)+j] = Float4GetDatum((float) -1* inva[(i*m)+j]/2);
+                result[param_out_index+(i*m)+j] = Float8GetDatum((float) -1* inva[(i*m)+j]/2);
             }
         }
         //elog(WARNING, "h");
@@ -175,7 +175,7 @@ Datum qda_train(PG_FUNCTION_ARGS)
         dgemv(&task, &m, &m, &alpha, inva, &m, mean_vector, &increment, &beta, lin_result, &increment);
         for(int j=0; j<m; j++){
             //elog(WARNING, "mean %lf", mean_vector[j]);
-            result[param_out_index+j] = Float4GetDatum((float) lin_result[j]);
+            result[param_out_index+j] = Float8GetDatum((float) lin_result[j]);
         }
         //elog(WARNING, "i");
 
@@ -189,12 +189,12 @@ Datum qda_train(PG_FUNCTION_ARGS)
         intercept = ((-1)*intercept/(double)2) - (log(determinant)/(double)2) + log(sum_vector[0]/(double)tot_tuples);
         //elog(WARNING, "intercept 1 %lf", (log(determinant)/(double)2));
         //elog(WARNING, "intercept 1 %lf", log(sum_vector[0]/(double)tot_tuples));
-        result[param_out_index] = Float4GetDatum((float) intercept);
+        result[param_out_index] = Float8GetDatum((float) intercept);
         param_out_index++;
         //elog(WARNING, "l");
     }
 
-    ArrayType *a = construct_array(result, res_size, FLOAT4OID, sizeof(float4), true, TYPALIGN_INT);
+    ArrayType *a = construct_array(result, res_size, FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
     PG_RETURN_ARRAYTYPE_P(a);
 }
 
@@ -240,8 +240,8 @@ Datum qda_predict(PG_FUNCTION_ARGS)
     deconstruct_array(feats_categorical, arrayElementType3, arrayElementTypeWidth3, arrayElementTypeByValue3, arrayElementTypeAlignmentCode3,
                       &arrayContent3, &arrayNullFlags3, &arrayLength3);
 
-    int n_classes = DatumGetFloat4(arrayContent1[0]);
-    int size_idxs = DatumGetFloat4(arrayContent1[1]);
+    int n_classes = DatumGetFloat8(arrayContent1[0]);
+    int size_idxs = DatumGetFloat8(arrayContent1[1]);
     int one_hot_size = 0;
     uint64_t *cat_vars_idxs;
     uint64_t *cat_vars;
@@ -252,12 +252,12 @@ Datum qda_predict(PG_FUNCTION_ARGS)
     if (size_idxs > 0) {
         cat_vars_idxs = (uint64_t *) palloc0(sizeof(uint64_t) * (size_idxs));//max. size
         for (size_t i = 0; i < size_idxs; i++)
-            cat_vars_idxs[i] = DatumGetFloat4(arrayContent1[i + 2]);
+            cat_vars_idxs[i] = DatumGetFloat8(arrayContent1[i + 2]);
 
         one_hot_size = cat_vars_idxs[size_idxs - 1];
         cat_vars = (uint64_t *) palloc(sizeof(uint64_t) * one_hot_size);//max. size
         for (size_t i = 0; i < cat_vars_idxs[size_idxs - 1]; i++)
-            cat_vars[i] = DatumGetFloat4(arrayContent1[i + 2 + size_idxs]);
+            cat_vars[i] = DatumGetFloat8(arrayContent1[i + 2 + size_idxs]);
 
         k=2+cat_vars_idxs[size_idxs-1]+size_idxs;
     }
@@ -272,7 +272,7 @@ Datum qda_predict(PG_FUNCTION_ARGS)
 
     //copy features
     for(int i=0; i<arrayLength2; i++)
-        features[i] = DatumGetFloat4(arrayContent2[i]);
+        features[i] = DatumGetFloat8(arrayContent2[i]);
 
     for(int i=0; i<arrayLength3; i++){//categorical feats (builds 1-hot encoded vector)
         int class = DatumGetInt64(arrayContent3[i]);
@@ -288,14 +288,14 @@ Datum qda_predict(PG_FUNCTION_ARGS)
     for(size_t i=0; i<n_classes; i++){
         //copy qda params
         for(size_t j=0; j<n_params*n_params; j++){
-            quad_matrix[j] = DatumGetFloat4(arrayContent1[j + k]);
+            quad_matrix[j] = DatumGetFloat8(arrayContent1[j + k]);
         }
         k += (n_params*n_params);
         for(size_t j=0; j<n_params; j++){
-            lin_matrix[j] = DatumGetFloat4(arrayContent1[j + k]);
+            lin_matrix[j] = DatumGetFloat8(arrayContent1[j + k]);
         }
         k += (n_params);
-        double intercept = DatumGetFloat4(arrayContent1[k]);
+        double intercept = DatumGetFloat8(arrayContent1[k]);
         k++;
 
         //compute probability of given class with matrix multiplication

@@ -162,8 +162,8 @@ Datum lda_train(PG_FUNCTION_ARGS)
     // export in pgpsql. Return values
     Datum *d = (Datum *)palloc(sizeof(Datum) * (num_categories + (num_params * num_categories) + 2 + cat_vars_idxs[cofactor->num_categorical_vars] + cofactor->num_categorical_vars));
 
-    d[0] = Float4GetDatum((float)num_categories);//n. classes
-    d[1] = Float4GetDatum((float)cofactor->num_categorical_vars);//size categorical columns -1 (label) (size idxs)
+    d[0] = Float8GetDatum((float)num_categories);//n. classes
+    d[1] = Float8GetDatum((float)cofactor->num_categorical_vars);//size categorical columns -1 (label) (size idxs)
 
     size_t idx_output = 2;
     if (num_params - cofactor->num_continuous_vars > 0) {//there are categorical variables
@@ -174,38 +174,38 @@ Datum lda_train(PG_FUNCTION_ARGS)
                 remove = cat_vars_idxs[i+1] - cat_vars_idxs[i];
                 continue;
             }
-            d[idx_output] = Float4GetDatum((float) cat_vars_idxs[i] - remove);
+            d[idx_output] = Float8GetDatum((float) cat_vars_idxs[i] - remove);
             idx_output++;
         }
         //now store categorical values without label
         for (size_t i = 0; i < cat_vars_idxs[label]; i++) {
-            d[idx_output] = Float4GetDatum((float) cat_array[i]);
+            d[idx_output] = Float8GetDatum((float) cat_array[i]);
             idx_output++;
         }
         for (size_t i = cat_vars_idxs[label + 1]; i < cat_vars_idxs[cofactor->num_categorical_vars]; i++) {
-            d[idx_output] = Float4GetDatum((float) cat_array[i]);
+            d[idx_output] = Float8GetDatum((float) cat_array[i]);
             idx_output++;
         }
     }
 
     //add categorical labels
     for (size_t i = cat_vars_idxs[label]; i < cat_vars_idxs[label + 1]; i++) {
-        d[idx_output] = Float4GetDatum((float) cat_array[i]);
+        d[idx_output] = Float8GetDatum((float) cat_array[i]);
         idx_output++;
     }
 
     //store coefficients
     for (int i = 0; i < num_params * num_categories; i++) {
-        d[i + idx_output] = Float4GetDatum((float) coef[i]);
+        d[i + idx_output] = Float8GetDatum((float) coef[i]);
     }
     idx_output += num_params * num_categories;
 
     //store intercept
     for (int i = 0; i < num_categories; i++) {
-        d[i + idx_output] = Float4GetDatum((float) intercept[i]);
+        d[i + idx_output] = Float8GetDatum((float) intercept[i]);
     }
 
-    ArrayType *a = construct_array(d, (num_categories + (num_params * num_categories) + 2 + cat_vars_idxs[cofactor->num_categorical_vars] + cofactor->num_categorical_vars), FLOAT4OID, sizeof(float4), true, TYPALIGN_INT);
+    ArrayType *a = construct_array(d, (num_categories + (num_params * num_categories) + 2 + cat_vars_idxs[cofactor->num_categorical_vars] + cofactor->num_categorical_vars), FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
     PG_RETURN_ARRAYTYPE_P(a);
 }
 
@@ -243,8 +243,8 @@ Datum lda_impute(PG_FUNCTION_ARGS)
                       &arrayContent3, &arrayNullFlags3, &arrayLength3);
 
     //re-create train values
-    int size_cat_vars_idxs = DatumGetFloat4(arrayContent1[1]);
-    int num_categories = (int) DatumGetFloat4(arrayContent1[0]);
+    int size_cat_vars_idxs = DatumGetFloat8(arrayContent1[1]);
+    int num_categories = (int) DatumGetFloat8(arrayContent1[0]);
     size_t curr_param_offset = 2;
 
     int num_params = arrayLength2;
@@ -253,20 +253,20 @@ Datum lda_impute(PG_FUNCTION_ARGS)
     if (size_cat_vars_idxs > 0) {
         cat_vars_idxs = (uint64_t *) palloc0(sizeof(uint64_t) * (size_cat_vars_idxs));
         for(size_t i=0; i<size_cat_vars_idxs; i++){//build cat_var_idxs
-            cat_vars_idxs[i] = DatumGetFloat4(arrayContent1[i+curr_param_offset]);//re-build index vector (begin:end of each cat. column)
+            cat_vars_idxs[i] = DatumGetFloat8(arrayContent1[i+curr_param_offset]);//re-build index vector (begin:end of each cat. column)
         }
         curr_param_offset += size_cat_vars_idxs;
         num_params = arrayLength2 + cat_vars_idxs[size_cat_vars_idxs-1];
         cat_vars = (uint64_t *) palloc0(sizeof(uint64_t) * (cat_vars_idxs[size_cat_vars_idxs-1]));//build cat_var
         for(size_t i=0; i<cat_vars_idxs[size_cat_vars_idxs-1]; i++){
-            cat_vars[i] = DatumGetFloat4(arrayContent1[i+curr_param_offset]);
+            cat_vars[i] = DatumGetFloat8(arrayContent1[i+curr_param_offset]);
         }
         curr_param_offset += cat_vars_idxs[size_cat_vars_idxs-1];
     }
 
     int *target_labels = (int *) palloc0(sizeof(int) * num_categories);
     for(size_t i=0; i<num_categories; i++) {
-        target_labels[i] = DatumGetFloat4(arrayContent1[i + curr_param_offset]);//build label classes
+        target_labels[i] = DatumGetFloat8(arrayContent1[i + curr_param_offset]);//build label classes
     }
 
     curr_param_offset += num_categories;
@@ -276,19 +276,19 @@ Datum lda_impute(PG_FUNCTION_ARGS)
 
     for(int i=0;i< num_categories;i++)
         for(int j=0;j< num_params;j++)
-            coefficients[(j*num_categories)+i] = (double) DatumGetFloat4(arrayContent1[(i*num_params)+j+curr_param_offset]);
+            coefficients[(j*num_categories)+i] = (double) DatumGetFloat8(arrayContent1[(i*num_params)+j+curr_param_offset]);
 
     curr_param_offset += (num_params * num_categories);
 
     //build intercept
     for(int i=0;i<num_categories;i++)
-        intercept[i] = (double) DatumGetFloat4(arrayContent1[i+curr_param_offset]);
+        intercept[i] = (double) DatumGetFloat8(arrayContent1[i+curr_param_offset]);
 
     //allocate numerical features
 
     double *feats_c = (double *)palloc0(sizeof(double) * (num_params));
     for(int i=0;i<arrayLength2;i++) {
-        feats_c[i] = (double) DatumGetFloat4(arrayContent2[i]);
+        feats_c[i] = (double) DatumGetFloat8(arrayContent2[i]);
     }
 
     //allocate categorical features

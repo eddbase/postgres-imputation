@@ -52,6 +52,7 @@ size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, 
         num_categories += get_num_categories(crelation_array(cofactors[k]), cofactors[k]->num_categorical_vars, -1);//potentially overestimate
     }
 
+
     uint32_t *cat_vars_idxs = (uint32_t *)palloc0(sizeof(uint32_t) * (cofactors[0]->num_categorical_vars + 1)); // track start each cat. variable
     uint64_t *cat_array = (uint64_t *)palloc0(sizeof(uint64_t) * num_categories);//max. size
 
@@ -73,6 +74,8 @@ size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, 
             //create sorted array
             for (size_t j = 0; j < r->num_tuples; j++) {
                 size_t key_index = find_in_array(r->tuples[j].key, cat_array, search_start, search_end);
+                elog(WARNING, "search val = %d from %d to %d", r->tuples[j].key, (int)search_start, (int)search_end);
+
                 if (key_index == search_end) {
                     uint64_t value_to_insert = r->tuples[j].key;
                     uint64_t tmp;
@@ -90,6 +93,7 @@ size_t n_cols_1hot_expansion(const cofactor_t **cofactors, size_t n_aggregates, 
             relation_scan[k] += r->sz_struct;
         }
         cat_vars_idxs[i + 1] = cat_vars_idxs[i] + (search_end - search_start);
+        elog(WARNING, "cat_vars_idxs = %d", cat_vars_idxs[i + 1]);
         search_start = search_end;
     }
 
