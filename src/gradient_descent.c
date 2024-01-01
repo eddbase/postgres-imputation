@@ -156,7 +156,7 @@ Datum ridge_linear_regression(PG_FUNCTION_ARGS)
     if (normalize){
         means = (double *)palloc0(sizeof(double) * num_params);
         std = (double *)palloc0(sizeof(double) * num_params);
-        standardize(sigma, num_params, means, std);
+        standardize_sigma(sigma, num_params, means, std);
         for(size_t i=0; i<num_params; i++)
             elog(DEBUG3, "std: %lf", std[i]);//0 variance for first col
     }

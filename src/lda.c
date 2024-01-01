@@ -41,13 +41,14 @@ int compare( const void* a, const void* b)
 
 //trains a LDA model given the required aggregates
 //input: triple. Output: coefficients
-PG_FUNCTION_INFO_V1(lda_train);
+PG_FUNCTION_INFO_V1(train_lda);
 
-Datum lda_train(PG_FUNCTION_ARGS)
+Datum train_lda(PG_FUNCTION_ARGS)
 {
     const cofactor_t *cofactor = (const cofactor_t *)PG_GETARG_VARLENA_P(0);
-    int label = PG_GETARG_INT64(1);
+    int label = PG_GETARG_INT64(1);//label index (in cat. columns)
     double shrinkage = PG_GETARG_FLOAT8(2);
+    bool normalize = PG_GETARG_BOOL(3);
 
     size_t num_params = sizeof_sigma_matrix(cofactor, label);
     float8 *sigma_matrix = (float8 *)palloc0(sizeof(float8) * num_params * num_params);
@@ -64,17 +65,38 @@ Datum lda_train(PG_FUNCTION_ARGS)
         }
         relation_data += r->sz_struct;
     }
+    elog(WARNING, "A");
     uint64_t *cat_array = NULL;//keeps all the categorical values inside the columns
     uint32_t *cat_vars_idxs = NULL;//keeps index of begin and end for each column in cat_array
 
     size_t tot_columns = n_cols_1hot_expansion(&cofactor, 1, &cat_vars_idxs, &cat_array, 0);//I need this function because I need cat_vars_idxs and cat_array
     //given aggregates, LDA requires a sigma (cofactor) matrix and a sum for each attribute grouped by label
+    elog(WARNING, "B");
     double *sum_vector = (double *)palloc0(sizeof(double) * num_params * num_categories);
     double *mean_vector = (double *)palloc0(sizeof(double) * (num_params-1) * num_categories);
     double *coef = (double *)palloc0(sizeof(double) * (num_params-1) * num_categories);//from mean to coeff
 
     build_sigma_matrix(cofactor, num_params, label, cat_array, cat_vars_idxs, 0, sigma_matrix);
     build_sum_matrix(cofactor, num_params, label, cat_array, cat_vars_idxs, 0, sum_vector);
+    elog(WARNING, "C");
+
+    double *means = NULL;
+    double *std = NULL;
+
+    if(normalize){
+        means = (double *)palloc0(sizeof(double) * num_params);
+        std = (double *)palloc0(sizeof(double) * num_params);
+        standardize_sigma(sigma_matrix, num_params, means, std);
+        //standardize also mean vec
+        for (size_t i=0; i<num_categories;i++){
+            for(size_t j=1; j<num_params; j++){
+                //(value - N*mean)/std
+                //N = sum_vec[0]
+                sum_vector[(i*num_params)+j] = (sum_vector[(i*num_params)+j] - (means[j]*sum_vector[i*num_params])) / std[j];
+            }
+        }
+    }
+    elog(WARNING, "D");
 
     //Removed constant terms: we just need cofactor (covariance)
     //shift cofactor, coef and mean
@@ -84,6 +106,7 @@ Datum lda_train(PG_FUNCTION_ARGS)
         }
     }
     num_params--;
+    elog(WARNING, "E");
 
     //build covariance matrix and mean vectors from cofactor matrix and sum vector
     //we can reuse sigma_matrix to generate covariance, so don't allocate a new matrix
@@ -91,12 +114,14 @@ Datum lda_train(PG_FUNCTION_ARGS)
     for (size_t i = 0; i < num_categories; i++) {
         for (size_t j = 0; j < num_params; j++) {
             for (size_t k = 0; k < num_params; k++) {
+                //deletr constant terms
                 sigma_matrix[(j*num_params)+k] -= ((float8)(sum_vector[(i*(num_params+1))+(j+1)] * sum_vector[(i*(num_params+1))+(k+1)]) / (float8) sum_vector[i*(num_params+1)]);//cofactor->count
             }
             coef[(i*num_params)+j] = sum_vector[(i*(num_params+1))+(j+1)] / sum_vector[(i*(num_params+1))];
             mean_vector[(j*num_categories)+i] = coef[(i*num_params)+(j)];
         }
     }
+    elog(WARNING, "F");
 
     //introduce covariance matrix introducing shrinkage (regulatization) if set
     double mu = 0;
@@ -104,6 +129,7 @@ Datum lda_train(PG_FUNCTION_ARGS)
         mu += sigma_matrix[(j*num_params)+j];
     }
     mu /= (float) num_params;
+    elog(WARNING, "G");
 
     for (size_t j = 0; j < num_params; j++) {
         for (size_t k = 0; k < num_params; k++) {
@@ -114,6 +140,7 @@ Datum lda_train(PG_FUNCTION_ARGS)
     for (size_t j = 0; j < num_params; j++) {
         sigma_matrix[(j*num_params)+j] += shrinkage * mu;
     }
+    elog(WARNING, "H");
 
     //normalize with / count
     for (size_t j = 0; j < num_params; j++) {
@@ -121,6 +148,7 @@ Datum lda_train(PG_FUNCTION_ARGS)
             sigma_matrix[(j*num_params)+k] /= (float8)(cofactor->count);//or / cofactor->count - num_categories
         }
     }
+    elog(WARNING, "I");
 
 
     //Solve the optimization problem with LAPACK
@@ -159,14 +187,34 @@ Datum lda_train(PG_FUNCTION_ARGS)
         intercept[j] = (res[(j*num_categories)+j] * (-0.5)) + log(sum_vector[(j) * (num_params+1)] / cofactor->count);
     }
 
-    // export in pgpsql. Return values
-    Datum *d = (Datum *)palloc(sizeof(Datum) * (num_categories + (num_params * num_categories) + 2 + cat_vars_idxs[cofactor->num_categorical_vars] + cofactor->num_categorical_vars));
+    if(normalize){
+        //apply normalization to coefficients
+        //coefficients need to be devided by parameter variance
+        //intercept is the same as there is no need for de-normalize output
+        for(size_t i=0; i<num_categories; i++){
+            for(size_t j=0; j<num_params; j++){//coeff does not include constant term and num_params already decreased
+                coef[(i*num_params)+j] /= std[j+1];
+            }
+        }
+    }
+
+    size_t size_out = (2 + cat_vars_idxs[cofactor->num_categorical_vars] + num_params - cofactor->num_continuous_vars);//2 + all unique categoricals + idxs if cat. values
+    size_out += num_categories + (num_params * num_categories);//coeff + intercept
+
+    if(normalize){
+        size_out += num_params;
+    }
+    elog(WARNING, "J");
+
+        // export in pgpsql. Return values
+    Datum *d = (Datum *)palloc(sizeof(Datum) * size_out);
 
     d[0] = Float8GetDatum((float)num_categories);//n. classes
-    d[1] = Float8GetDatum((float)cofactor->num_categorical_vars);//size categorical columns -1 (label) (size idxs)
+    d[1] = Float8GetDatum((float)cofactor->num_categorical_vars -1);//size categorical columns -1 (label) (size idxs)
 
-    size_t idx_output = 2;
-    if (num_params - cofactor->num_continuous_vars > 0) {//there are categorical variables
+    int idx_output = 2;
+    if (num_params - cofactor->num_continuous_vars > 0) {//there are categorical variables excluding label
+        elog(WARNING, "cat vals");
         size_t remove = 0;
         //store categorical value indices of cat. columns (without label)
         for (size_t i = 0; i < cofactor->num_categorical_vars + 1; i++) {
@@ -187,35 +235,53 @@ Datum lda_train(PG_FUNCTION_ARGS)
             idx_output++;
         }
     }
+    elog(WARNING, "K");
 
     //add categorical labels
     for (size_t i = cat_vars_idxs[label]; i < cat_vars_idxs[label + 1]; i++) {
         d[idx_output] = Float8GetDatum((float) cat_array[i]);
         idx_output++;
     }
+    elog(WARNING, "K");
 
     //store coefficients
     for (int i = 0; i < num_params * num_categories; i++) {
         d[i + idx_output] = Float8GetDatum((float) coef[i]);
     }
     idx_output += num_params * num_categories;
+    elog(WARNING, "K");
 
     //store intercept
     for (int i = 0; i < num_categories; i++) {
         d[i + idx_output] = Float8GetDatum((float) intercept[i]);
     }
+    idx_output += num_categories;
+    elog(WARNING, "K");
 
-    ArrayType *a = construct_array(d, (num_categories + (num_params * num_categories) + 2 + cat_vars_idxs[cofactor->num_categorical_vars] + cofactor->num_categorical_vars), FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
+    //store means if normalized
+    if(normalize){
+        for (int i = 0; i < num_params; i++) {
+            d[i + idx_output] = Float8GetDatum((float) means[i+1]);
+        }
+        idx_output += num_params;
+    }
+    elog(WARNING, "asser...");
+
+    assert(size_out == idx_output);
+
+    ArrayType *a = construct_array(d, idx_output, FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
     PG_RETURN_ARRAYTYPE_P(a);
 }
 
 //impute: given train parameters and features, returns class
-PG_FUNCTION_INFO_V1(lda_impute);
-Datum lda_impute(PG_FUNCTION_ARGS)
+PG_FUNCTION_INFO_V1(lda_predict);
+Datum lda_predict(PG_FUNCTION_ARGS)
 {
     ArrayType *means_covariance = PG_GETARG_ARRAYTYPE_P(0);//result of train
     ArrayType *feats_numerical = PG_GETARG_ARRAYTYPE_P(1);
     ArrayType *feats_categorical = PG_GETARG_ARRAYTYPE_P(2);
+    bool normalize = PG_GETARG_BOOL(3);
+
 
     Oid arrayElementType1 = ARR_ELEMTYPE(means_covariance);
     Oid arrayElementType2 = ARR_ELEMTYPE(feats_numerical);
@@ -283,6 +349,7 @@ Datum lda_impute(PG_FUNCTION_ARGS)
     //build intercept
     for(int i=0;i<num_categories;i++)
         intercept[i] = (double) DatumGetFloat8(arrayContent1[i+curr_param_offset]);
+    curr_param_offset += num_categories;
 
     //allocate numerical features
 
@@ -298,6 +365,18 @@ Datum lda_impute(PG_FUNCTION_ARGS)
         size_t index = find_in_array(class, cat_vars, cat_vars_idxs[i], cat_vars_idxs[i+1]);//use cat.vars to find index of cat. value
         assert (index < cat_vars_idxs[i+1]);//1-hot used here, without removing values from 1-hot
         feats_c[arrayLength2 + index] = 1;//build 1-hot feat vector
+    }
+
+    if(normalize){
+        //center input vector
+        for(int i=0;i<arrayLength2;i++) {
+            feats_c[i] -= (double) DatumGetFloat8(arrayContent1[curr_param_offset + i]);
+        }
+        curr_param_offset += arrayLength2;
+        //also center other classes
+        for(int i=0;i<cat_vars_idxs[size_cat_vars_idxs-1];i++) {
+            feats_c[arrayLength2 + i] -= (double) DatumGetFloat8(arrayContent1[curr_param_offset + i]);
+        }
     }
 
     //end unpacking

@@ -59,6 +59,6 @@ void build_sum_matrix(const cofactor_t *cofactor, size_t num_total_params, int l
 void build_sum_vector(const cofactor_t *cofactor, size_t num_total_params, uint64_t *cat_array, uint32_t *cat_vars_idxs, int drop_first,
         /* out */ double *sum_vector);
 
-void standardize(double *sigma, size_t num_params, double *means, double *std);//means and std are out
+void standardize_sigma(double *sigma, size_t num_params, double *means, double *std);//means and std are out
 
 #endif // COFACTOR_H

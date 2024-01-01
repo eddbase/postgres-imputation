@@ -955,7 +955,7 @@ void build_sum_matrix(const cofactor_t *cofactor, size_t num_total_params, int l
 }
 
 
-void standardize(double *sigma, size_t num_params, double *means, double *std){
+void standardize_sigma(double *sigma, size_t num_params, double *means, double *std){
     //compute mean and variance of every column
     //and standardize the data
     for(size_t i=0; i<num_params; i++)

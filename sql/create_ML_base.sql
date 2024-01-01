@@ -35,23 +35,25 @@ CREATE OR REPLACE FUNCTION ridge_linear_regression_from_params(
     AS :FACTML_LIBRARY, 'ridge_linear_regression_from_params'
     LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
- CREATE OR REPLACE FUNCTION lda_train(
+ CREATE OR REPLACE FUNCTION train_lda(
          c cofactor,
          label int,
-         shrinkage float8
+         shrinkage float8,
+         norm boolean
      )
      RETURNS float8[]
-     AS :FACTML_LIBRARY, 'lda_train'
+     AS :FACTML_LIBRARY, 'train_lda'
      LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 
  CREATE OR REPLACE FUNCTION lda_predict(
          train_data float8[],
          feats_numerical float8[],
-         feats_categorical int[]
+         feats_categorical int[],
+         norm boolean
      )
      RETURNS int
-     AS :FACTML_LIBRARY, 'lda_impute'
+     AS :FACTML_LIBRARY, 'lda_predict'
      LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
      
      
@@ -71,17 +73,20 @@ CREATE OR REPLACE FUNCTION ridge_linear_regression_from_params(
      AS :FACTML_LIBRARY, 'naive_bayes_predict'
      LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
      
- CREATE OR REPLACE FUNCTION qda_train(
-         aggregates cofactor[]
+ CREATE OR REPLACE FUNCTION train_qda(
+         aggregates cofactor[],
+         labels int[],
+         norm boolean
      )
      RETURNS float8[]
-     AS :FACTML_LIBRARY, 'qda_train'
+     AS :FACTML_LIBRARY, 'train_qda'
      LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
      
  CREATE OR REPLACE FUNCTION qda_predict(
          params float8[],
          cont_feats float8[],
-         cat_feats int[]
+         cat_feats int[],
+         norm boolean
      )
      RETURNS int
      AS :FACTML_LIBRARY, 'qda_predict'

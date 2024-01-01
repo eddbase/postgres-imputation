@@ -109,3 +109,74 @@ df = df_test_encoded[["id", "s_length"]].merge(df, left_on='id', right_on='id')
 
 print("Postgres R2: ", r2_score(df["s_length"], df["pred"]))
 
+##### LDA now:
+
+#SKLearn
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+clf = LinearDiscriminantAnalysis(solver = 'lsqr', shrinkage=0)
+clf.fit(df_train.drop(["target", "id"], axis=1), df_train["target"])
+print("Accuracy SKLearn LDA: ", clf.score(df_test.drop(["target", "id"], axis=1), df_test["target"]))
+
+#PostgreSQL
+cur = conn.cursor()
+cur.execute("SELECT lda_train(ARRAY['s_length', 's_width', 'p_length', 'p_width'], ARRAY['target'], 'iris_train', 1, 0, false);")
+rows = cur.fetchall()
+conn.commit()
+row = rows[0]
+cur.close()
+print("params: ", row)
+
+cur = conn.cursor()
+cur.execute("SELECT lda_predict(ARRAY"+str(row[0])+"::float8[], ARRAY[s_length, s_width, p_length, p_width], ARRAY[]::int[], false), id from iris_test;")
+rows_pred = cur.fetchall()
+conn.commit()
+
+ids = []
+preds = []
+for row in rows_pred:
+    ids += [row[1]]
+    preds+=[row[0]]
+cur.close()
+
+d = {'id': ids, 'pred': preds}
+df = pd.DataFrame(data=d)
+df = df_test[["id", "target"]].merge(df, left_on='id', right_on='id')
+
+from sklearn.metrics import accuracy_score
+print("Accuracy PostgreSQL LDA: ", accuracy_score(df["target"], df["pred"]))
+
+
+#QDA now
+
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+clf = QuadraticDiscriminantAnalysis(store_covariance=True)
+df_train_std["target"] = df_train["target"]
+clf.fit(df_train_std.drop(["target", "id"], axis=1), df_train["target"])
+print("Accuracy QDA SKLearn ", clf.score(df_test.drop(["target", "id"], axis=1), df_test["target"]))
+
+
+cur = conn.cursor()
+cur.execute("SELECT qda_train(ARRAY['s_length', 's_width', 'p_length', 'p_width'], ARRAY['target'], 'iris_train', 1, false);")
+rows = cur.fetchall()
+conn.commit()
+row = rows[0]
+cur.close()
+print("params: ", row)
+
+cur = conn.cursor()
+cur.execute("SELECT qda_predict(ARRAY"+str(row[0])+"::float8[], ARRAY[s_length, s_width, p_length, p_width], ARRAY[]::int[], false), id from iris_test;")
+rows_pred = cur.fetchall()
+conn.commit()
+
+ids = []
+preds = []
+for row in rows_pred:
+    ids += [row[1]]
+    preds+=[row[0]]
+cur.close()
+
+d = {'id': ids, 'pred': preds}
+df = pd.DataFrame(data=d)
+df = df_test[["id", "target"]].merge(df, left_on='id', right_on='id')
+
+print("Accuracy PostgreSQL LDA: ", accuracy_score(df["target"], df["pred"]))
