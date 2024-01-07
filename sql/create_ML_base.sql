@@ -58,13 +58,14 @@ CREATE OR REPLACE FUNCTION ridge_linear_regression_from_params(
      
      
  CREATE OR REPLACE FUNCTION naive_bayes_train(
-         aggregates nb_aggregates[]
+         aggregates nb_aggregates[],
+         labels int[]
      )
      RETURNS float8[]
      AS :FACTML_LIBRARY, 'naive_bayes_train'
      LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
      
- CREATE OR REPLACE FUNCTION naive_bayes_predict(
+ CREATE OR REPLACE FUNCTION nb_predict(
          params float8[],
          cont_feats float8[],
          cat_feats int[]

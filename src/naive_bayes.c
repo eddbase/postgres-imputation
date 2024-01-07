@@ -26,17 +26,25 @@ Datum naive_bayes_train(PG_FUNCTION_ARGS)
 {
     ArrayType *cofactors = PG_GETARG_ARRAYTYPE_P(0);
     Oid arrayElementType1 = ARR_ELEMTYPE(cofactors);
+    ArrayType *labels = PG_GETARG_ARRAYTYPE_P(1);
+    Oid arrayElementType2 = ARR_ELEMTYPE(labels);
 
-    int16 arrayElementTypeWidth1;
-    bool arrayElementTypeByValue1;
-    Datum *arrayContent1;
-    bool *arrayNullFlags1;
-    int n_aggregates;
-    char arrayElementTypeAlignmentCode1;
+
+    int16 arrayElementTypeWidth1, arrayElementTypeWidth2;
+    bool arrayElementTypeByValue1, arrayElementTypeByValue2;
+    Datum *arrayContent1, *arrayContent2;
+    bool *arrayNullFlags1, *arrayNullFlags2;
+    int n_aggregates, n_aggregates2;
+    char arrayElementTypeAlignmentCode1, arrayElementTypeAlignmentCode2;
 
     get_typlenbyvalalign(arrayElementType1, &arrayElementTypeWidth1, &arrayElementTypeByValue1, &arrayElementTypeAlignmentCode1);
     deconstruct_array(cofactors, arrayElementType1, arrayElementTypeWidth1, arrayElementTypeByValue1, arrayElementTypeAlignmentCode1,
                       &arrayContent1, &arrayNullFlags1, &n_aggregates);
+
+    get_typlenbyvalalign(arrayElementType2, &arrayElementTypeWidth2, &arrayElementTypeByValue2, &arrayElementTypeAlignmentCode2);
+    deconstruct_array(labels, arrayElementType2, arrayElementTypeWidth2, arrayElementTypeByValue2, arrayElementTypeAlignmentCode2,
+                      &arrayContent2, &arrayNullFlags2, &n_aggregates2);
+
 
     const cofactor_t **aggregates = (const cofactor_t **)palloc0(sizeof(cofactor_t *) * n_aggregates);
 
@@ -56,28 +64,54 @@ Datum naive_bayes_train(PG_FUNCTION_ARGS)
 
     //compute mean and variance for every numerical feature
     //result = n. aggregates (classes), n. cat. values (cat_array size), cat_array, probs for each class, mean, variance for every num. feat. in 1st aggregate, prob. each cat. value 1st aggregate, ...
-    Datum *result = (Datum *)palloc0(sizeof(Datum) * ((2*aggregates[0]->num_continuous_vars*n_aggregates)//continuous
-                                        +(cat_vars_idxs[aggregates[0]->num_categorical_vars]*n_aggregates)//categoricals
-                                        +aggregates[0]->num_categorical_vars + 1 //cat. vars. idxs
-                                        +n_aggregates + 1 + 1 + cat_vars_idxs[aggregates[0]->num_categorical_vars]));
+    Datum *result;
+
+    if (aggregates[0]->num_categorical_vars > 0) {
+        result = (Datum *) palloc0(sizeof(Datum) * ((2 * aggregates[0]->num_continuous_vars * n_aggregates)//continuous
+                                             + (cat_vars_idxs[aggregates[0]->num_categorical_vars] *
+                                                n_aggregates)//categoricals
+                                             + aggregates[0]->num_categorical_vars + 1 //cat. vars. idxs
+                                             + n_aggregates + n_aggregates + 1 + 1 +//init
+                                             cat_vars_idxs[aggregates[0]->num_categorical_vars]));//copy categorical
+    }
+    else{
+        result = (Datum *) palloc0(sizeof(Datum) * ((2 * aggregates[0]->num_continuous_vars * n_aggregates)//continuous
+                                                    + n_aggregates + n_aggregates + 1 + 1));
+    }
     result[0] = Float8GetDatum(n_aggregates);
-    result[1] = Float8GetDatum(aggregates[0]->num_categorical_vars+1);
 
-    //stores here cat_vars_idxs and cat_array. Label is not part of the columns
-    for(size_t i=0; i<aggregates[0]->num_categorical_vars + 1; i++)
-        result[i+2] = Float8GetDatum(cat_vars_idxs[i]);
+    size_t k=2;
+    if (aggregates[0]->num_categorical_vars > 0) {
+        result[1] = Float8GetDatum(aggregates[0]->num_categorical_vars + 1);
 
-    for(size_t i=0; i<cat_vars_idxs[aggregates[0]->num_categorical_vars]; i++)
-        result[i+2+aggregates[0]->num_categorical_vars+1] = Float8GetDatum(cat_array[i]);
+        //stores here cat_vars_idxs and cat_array. Label is not part of the columns
+        for(size_t i=0; i<aggregates[0]->num_categorical_vars + 1; i++)
+            result[i+2] = Float8GetDatum(cat_vars_idxs[i]);
+
+        for(size_t i=0; i<cat_vars_idxs[aggregates[0]->num_categorical_vars]; i++)
+            result[i+2+aggregates[0]->num_categorical_vars+1] = Float8GetDatum(cat_array[i]);
+        k=2+cat_vars_idxs[aggregates[0]->num_categorical_vars]+aggregates[0]->num_categorical_vars+1;
+
+
+    }
+    else
+        result[1] = Float8GetDatum(0);
+
+    //now insert labels
+    for(size_t i=0; i<n_aggregates2; i++) {
+        result[k + i] = Float8GetDatum(DatumGetInt32(arrayContent2[i]));
+    }
+
 
     //start storing NB parameters
 
-    size_t k=n_aggregates+2+cat_vars_idxs[aggregates[0]->num_categorical_vars]+aggregates[0]->num_categorical_vars+1;
+    k += n_aggregates2 + n_aggregates;
+    size_t start_priors = k-n_aggregates;
     for(size_t i=0; i<n_aggregates; i++) {//each NB aggregate contains training data for a specific class
         //save here the frequency for categorical NB
         //these are the first NB parameters stored
 
-        result[i+2+cat_vars_idxs[aggregates[0]->num_categorical_vars]+aggregates[0]->num_categorical_vars+1] = Float8GetDatum(aggregates[i]->count / total_tuples);
+        result[start_priors+i] = Float8GetDatum(aggregates[i]->count / total_tuples);
 
         for (size_t j=0; j<aggregates[i]->num_continuous_vars; j++){//save numeric params (mean, variance) after n_aggregates values
             float mean = (float)cscalar_array(aggregates[i])[j] / (float)aggregates[i]->count;
@@ -86,24 +120,29 @@ Datum naive_bayes_train(PG_FUNCTION_ARGS)
             result[k+1] = Float8GetDatum(variance);
             k+=2;
         }
-        k += cat_vars_idxs[aggregates[0]->num_categorical_vars];
+        if (aggregates[0]->num_categorical_vars > 0)
+            k += cat_vars_idxs[aggregates[0]->num_categorical_vars];
     }
-
-    k=n_aggregates+2+cat_vars_idxs[aggregates[0]->num_categorical_vars]+(aggregates[0]->num_continuous_vars*2)+aggregates[0]->num_categorical_vars + 1;
-    for(size_t i=0; i<n_aggregates; i++) {
-        const char *relation_data = crelation_array(aggregates[i]);
-        for (size_t j=0; j<aggregates[i]->num_categorical_vars; j++){
-            relation_t *r = (relation_t *) relation_data;
-            for (size_t l = 0; l < r->num_tuples; l++) {
-                size_t index = find_in_array(r->tuples[l].key, cat_array, cat_vars_idxs[j], cat_vars_idxs[j+1]);
-                result[index + k] = Float8GetDatum((float) r->tuples[l].value / (float) aggregates[i]->count);//after mean and variance stores prior for num. columns
+    if (aggregates[0]->num_categorical_vars > 0) {
+        k = n_aggregates + 2 + cat_vars_idxs[aggregates[0]->num_categorical_vars] +
+            (aggregates[0]->num_continuous_vars * 2) + aggregates[0]->num_categorical_vars + 1;
+        for (size_t i = 0; i < n_aggregates; i++) {
+            const char *relation_data = crelation_array(aggregates[i]);//this is over nb aggregates
+            for (size_t j = 0; j < aggregates[i]->num_categorical_vars; j++) {
+                relation_t *r = (relation_t *) relation_data;
+                for (size_t l = 0; l < r->num_tuples; l++) {
+                    size_t index = find_in_array(r->tuples[l].key, cat_array, cat_vars_idxs[j], cat_vars_idxs[j + 1]);
+                    result[index + k] = Float8GetDatum((float) r->tuples[l].value /
+                                                       (float) aggregates[i]->count);//after mean and variance stores prior for num. columns
+                }
+                relation_data += r->sz_struct;
             }
-            relation_data += r->sz_struct;
+            k += cat_vars_idxs[aggregates[i]->num_categorical_vars] +
+                 (aggregates[i]->num_continuous_vars * 2);//jump to the next space where cat. values need to be written
         }
-        k += cat_vars_idxs[aggregates[i]->num_categorical_vars] + (aggregates[i]->num_continuous_vars*2);
     }
 
-    ArrayType *a = construct_array(result, ((2*aggregates[0]->num_continuous_vars*n_aggregates)+(cat_vars_idxs[aggregates[0]->num_categorical_vars]*n_aggregates)+n_aggregates+1+ 1 + cat_vars_idxs[aggregates[0]->num_categorical_vars] + aggregates[0]->num_categorical_vars + 1), FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
+    ArrayType *a = construct_array(result, k, FLOAT8OID, sizeof(float8), true, TYPALIGN_INT);
     PG_RETURN_ARRAYTYPE_P(a);
 }
 
@@ -143,8 +182,8 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
 
     int n_classes = DatumGetFloat8(arrayContent1[0]);
     int size_idxs = DatumGetFloat8(arrayContent1[1]);
-    size_t k=2+n_classes;//2+priors
-    size_t prior_offset = 2;
+    size_t k=2+n_classes + n_classes;//2+priors+labels
+    size_t prior_offset = 2 + n_classes;
     uint64_t *cat_vars_idxs;
     uint64_t *cat_vars;
 
@@ -157,16 +196,8 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
         for (size_t i = 0; i < cat_vars_idxs[size_idxs - 1]; i++)
             cat_vars[i] = DatumGetFloat8(arrayContent1[i + 2 + size_idxs]);
 
-        /*
-        for (size_t i = 0; i < size_idxs; i++) {
-            elog(WARNING, "n_feats_cat_idxs %zu", cat_vars_idxs[i]);
-        }
-        for (size_t i = 0; i < cat_vars_idxs[size_idxs - 1]; i++) {
-            elog(WARNING, "cat. feats. %zu", cat_vars[i]);
-        }*/
-
-        k=2+cat_vars_idxs[size_idxs-1]+size_idxs+n_classes;
-        prior_offset = 2+cat_vars_idxs[size_idxs-1]+size_idxs;
+        k=2+cat_vars_idxs[size_idxs-1]+size_idxs+n_classes+n_classes;
+        prior_offset = 2+cat_vars_idxs[size_idxs-1]+size_idxs+n_classes;
     }
 
     int best_class = 0;
@@ -207,5 +238,5 @@ Datum naive_bayes_predict(PG_FUNCTION_ARGS) {
             best_class = i;
         }
     }
-    PG_RETURN_INT64(best_class);
+    PG_RETURN_INT64((int) DatumGetFloat8(arrayContent1[prior_offset-n_classes+best_class]));
 }

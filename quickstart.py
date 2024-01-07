@@ -5,7 +5,14 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
+from sklearn.naive_bayes import GaussianNB
 
+param_dic = {
+    "host"      : "localhost",
+    "database"  : "postgres",
+    "user"      : "postgres",
+    "password"  : ""
+}
 
 def connect(params_dic):
     """ Connect to the PostgreSQL database server """
@@ -42,13 +49,6 @@ def execute_batch(conn, df, table, page_size=100):
     print("execute_batch() done")
     cursor.close()
 
-
-param_dic = {
-    "host"      : "localhost",
-    "database"  : "postgres",
-    "user"      : "postgres",
-    "password"  : ""
-}
 
 conn = connect(param_dic)
 data = load_iris(as_frame=True, return_X_y=True)
@@ -89,7 +89,7 @@ rows = cur.fetchall()
 conn.commit()
 row = rows[0]
 cur.close()
-print("params: ", row)
+#print("params: ", row)
 #predict
 cur = conn.cursor()
 cur.execute("SELECT linregr_predict(ARRAY"+str(row[0])+", ARRAY[ s_width, p_length, p_width ]::float8[],ARRAY[ target ]::int4[], false, true) as prediction, id from iris_test;")
@@ -124,7 +124,7 @@ rows = cur.fetchall()
 conn.commit()
 row = rows[0]
 cur.close()
-print("params: ", row)
+#print("params: ", row)
 
 cur = conn.cursor()
 cur.execute("SELECT lda_predict(ARRAY"+str(row[0])+"::float8[], ARRAY[s_length, s_width, p_length, p_width], ARRAY[]::int[], false), id from iris_test;")
@@ -150,8 +150,8 @@ print("Accuracy PostgreSQL LDA: ", accuracy_score(df["target"], df["pred"]))
 
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 clf = QuadraticDiscriminantAnalysis(store_covariance=True)
-df_train_std["target"] = df_train["target"]
-clf.fit(df_train_std.drop(["target", "id"], axis=1), df_train["target"])
+#df_train_std["target"] = df_train["target"]
+clf.fit(df_train.drop(["target", "id"], axis=1), df_train["target"])
 print("Accuracy QDA SKLearn ", clf.score(df_test.drop(["target", "id"], axis=1), df_test["target"]))
 
 
@@ -161,7 +161,7 @@ rows = cur.fetchall()
 conn.commit()
 row = rows[0]
 cur.close()
-print("params: ", row)
+#print("params: ", row)
 
 cur = conn.cursor()
 cur.execute("SELECT qda_predict(ARRAY"+str(row[0])+"::float8[], ARRAY[s_length, s_width, p_length, p_width], ARRAY[]::int[], false), id from iris_test;")
@@ -179,4 +179,34 @@ d = {'id': ids, 'pred': preds}
 df = pd.DataFrame(data=d)
 df = df_test[["id", "target"]].merge(df, left_on='id', right_on='id')
 
-print("Accuracy PostgreSQL LDA: ", accuracy_score(df["target"], df["pred"]))
+print("Accuracy PostgreSQL QDA: ", accuracy_score(df["target"], df["pred"]))
+
+clf = GaussianNB()
+clf.fit(df_train.drop(["target", "id"], axis=1), df_train["target"])
+print("Accuracy SKLearn Gaussian NB ", clf.score(df_test.drop(["target", "id"], axis=1), df_test["target"]))
+
+
+cur = conn.cursor()
+cur.execute("SELECT nb_train(ARRAY['s_length', 's_width', 'p_length', 'p_width'], ARRAY['target'], 'iris_train', 1, false);")
+rows = cur.fetchall()
+conn.commit()
+row = rows[0]
+cur.close()
+#print("params: ", row)
+cur = conn.cursor()
+cur.execute("SELECT nb_predict(ARRAY"+str(row[0])+"::float8[], ARRAY[s_length, s_width, p_length, p_width], ARRAY[]::int[]), id from iris_test;")
+rows_pred = cur.fetchall()
+conn.commit()
+
+ids = []
+preds = []
+for row in rows_pred:
+    ids += [row[1]]
+    preds+=[row[0]]
+cur.close()
+
+d = {'id': ids, 'pred': preds}
+df = pd.DataFrame(data=d)
+df = df_test[["id", "target"]].merge(df, left_on='id', right_on='id')
+
+print("Accuracy PostgreSQL NB: ", accuracy_score(df["target"], df["pred"]))
