@@ -23,12 +23,42 @@ Compile with
 ```
 cmake .
 make
-sql/create_UDFs.sh
+```
+
+Then, if you don't need the imputation part, install with
+
+```
+sql/create_UDFs.sh <database name>
+```
+
+Otherwise use
+
+```
+sql/create_UDFs.sh <database name> imputation
 ```
 
 ## How to use ML models
 
-You can use the new simplified interface to use models. Train functions return an array of parameters, prediction functions use the parameters to generate a prediction.
+You can use the simplified interface to use models. Train functions return an array of parameters (float8), prediction functions use the parameters to generate a prediction.
+
+All train functions accept these parameters:
+
+* num_columns: array of strings with the name of numerical features
+* cat_columns: array of strings with the name of numerical features
+* table_name: string with the name of the table (or join query, more on this later)
+* label\_index: The index (starting from 1) of the label (which feature is the label). The label must be inside num_columns (Linear Regression) or cat\_columns (classifiers)
+
+Certain models might require additional parameters
+
+All predict functions accept the following parameters:
+
+* num_columns: array of strings with the name of numerical features
+* cat_columns: array of strings with the name of numerical features
+* Table name: string with the name of the table
+
+They will return a float8 (regression) or integer (classifiers).
+
+Make sure the order of parameters is the same inside train and predict functions (of course do not include the label in the predict function). Certain models might require additional parameters.
 
 ### (Stochastic) Linear Regression
 
@@ -217,3 +247,50 @@ Accuracy PostgreSQL NB:  0.96
 ```
 
 ## Imputation
+
+There are 3 variation of MICE implemented: `MICE_baseline`, `MICE_low` and `MICE_high`. They accept the following parameters:
+
+```
+MICE_...(
+        input_table_name text,
+        output_table_name text,
+        continuous_columns text[],
+        categorical_columns text[],
+        continuous_columns_null text[], 
+        categorical_columns_null text[],
+        fillfactor integer,
+        iterations integer,
+        add_noise boolean
+    )
+```
+
+* input\_table\_name: table with missing values
+* output\_table\_name: name of the resulting table with imputed values
+* continuous\_columns: continuous columns in the model
+* categorical\_columns: categorical columns in the model
+* continuous\_columns\_null: continuous columns with missing values
+* categorical\_columns\_null: categorical columns with missing values
+* fillfactor fillfactor of the output table. Between 0 and 100. Usually inverse proportion of the tuples with missing values.
+* iterations MICE iterations
+* add_noise if true uses stochastic linear regression, otherwise linear regression
+
+### Imputation Quickstart
+
+`quickstart_imputation.py ` will automatically test the three imputation implementations against SKLearn. It will remove 20% of the values in three columns of the iris dataset, copy the table in PostgreSQL and compare SKLearn IterativeImputer agains our three implementations.
+
+Requires numpy, pandas, SKLearn and psycopg2. Expected output:
+
+```
+CALL MICE_high('iris_impute', 'iris_impute_res', ARRAY['id','s_length', 's_width', 'p_length', 'p_width', 'target']::text[], ARRAY[]::text[], ARRAY['s_width', 'p_length', 'p_width']::text[], ARRAY[]::text[], 75, 2, false);
+MSE between SKLearn and PostgreSQL in col:  s_width  :  5.339167815511109e-10
+MSE between SKLearn and PostgreSQL in col:  p_length  :  8.304800608420666e-11
+MSE between SKLearn and PostgreSQL in col:  p_width  :  9.189242077255187e-11
+CALL MICE_low('iris_impute', 'iris_impute_res', ARRAY['id','s_length', 's_width', 'p_length', 'p_width', 'target']::text[], ARRAY[]::text[], ARRAY['s_width', 'p_length', 'p_width']::text[], ARRAY[]::text[], 75, 2, false);
+MSE between SKLearn and PostgreSQL in col:  s_width  :  6.254319451641791e-05
+MSE between SKLearn and PostgreSQL in col:  p_length  :  6.25428759426222e-05
+MSE between SKLearn and PostgreSQL in col:  p_width  :  6.254286222810589e-05
+CALL MICE_baseline('iris_impute', 'iris_impute_res', ARRAY['id','s_length', 's_width', 'p_length', 'p_width', 'target']::text[], ARRAY[]::text[], ARRAY['s_width', 'p_length', 'p_width']::text[], ARRAY[]::text[], 75, 2, false);
+MSE between SKLearn and PostgreSQL in col:  s_width  :  6.398214097905294e-10
+MSE between SKLearn and PostgreSQL in col:  p_length  :  4.746474435237377e-11
+MSE between SKLearn and PostgreSQL in col:  p_width  :  1.071920705582795e-10
+```

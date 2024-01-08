@@ -10,9 +10,8 @@ CREATE OR REPLACE FUNCTION linregr_train(continuous_columns text[], categorical_
                     'ARRAY[ ' || array_to_string(categorical_columns, ', ') || ' ]::int4[]' ||
                 ')) FROM '||tbl;
             end if;
-            
         	EXECUTE query INTO cofactor_g;
-            RETURN ridge_linear_regression(cofactor_g, label_index -1 , step_size, lambda, max_iterations, return_variance, norm);
+            RETURN ridge_linear_regression(cofactor_g, label_index -1 , step_size::float8, lambda::float8, max_iterations::int, return_variance::boolean, norm::boolean);
         END;
 $$ LANGUAGE plpgsql;
 
