@@ -1,4 +1,16 @@
-This repository contains the implementation of ... based on the paper:...
+This repository contains the implementation of the paper:
+
+```
+@article{imp_2024_pacmmod,
+title={{In-Database Data Imputation}},
+author={Perini, Massimo and Nikolic, Milos},
+journal={Proc. ACM Manag. Data (PACMMOD)},
+volume={2},
+doi={10.1145/3639326},
+year={2024},
+publisher={Association for Computing Machinery},
+} 
+```
 
 This repository contains both a library for performing efficient Machine Learning and code to run MICE inside PostgreSQL 12+ (not tested on lower versions). The supported models are:
 
@@ -43,18 +55,18 @@ You can use the simplified interface to use models. Train functions return an ar
 
 All train functions accept these parameters:
 
-* num_columns: array of strings with the name of numerical features
-* cat_columns: array of strings with the name of numerical features
-* table_name: string with the name of the table (or join query, more on this later)
-* label\_index: The index (starting from 1) of the label (which feature is the label). The label must be inside num_columns (Linear Regression) or cat\_columns (classifiers)
+* `num_columns`: array of strings with the name of numerical features
+* `cat_columns`: array of strings with the name of numerical features
+* `table_name`: string with the name of the table (or join query, more on this later)
+* `label_index`: The index (starting from 1) of the label (which feature is the label). The label must be inside num_columns (Linear Regression) or cat\_columns (classifiers)
 
 Certain models might require additional parameters
 
 All predict functions accept the following parameters:
 
-* num_columns: array of strings with the name of numerical features
-* cat_columns: array of strings with the name of numerical features
-* Table name: string with the name of the table
+* `num_columns`: array of strings with the name of numerical features
+* `cat_columns`: array of strings with the name of numerical features
+* `Table name`: string with the name of the table
 
 They will return a float8 (regression) or integer (classifiers).
 
@@ -76,7 +88,7 @@ linregr_train(
 	compute_variance boolean)
 
 ```
-Example: train over iris\_train, with columns 's\_length', 's\_width', 'p\_length', 'p\_width' numerical and class categorical. The label is s_length
+Example: train over `iris_train`, with columns `s_length`, `s_width`, `p_length`, `p_width` numerical and class categorical. The label is `s_length`
 
 ```
 train_params := select linregr_train(
@@ -203,7 +215,7 @@ You can train a model over multiple tables in two ways:
 	1, 0.001, 0, 100000, false);
 
 ```
-* Train without joining the tables: The previous functions accept an extra query string at the end. You need to write a query which computes a cofactor matrix over the relations. For Linear Regression and LDA, just return a single cofactor matrix. Example of a possible query is:
+* Train without joining the tables: The previous functions accept an extra query string at the end. You need to write a query which computes a cofactor matrix over the relations. For Linear Regression and LDA, just return a single cofactor matrix, while for Naive Bayes and QDA the query must return a list of cofactors/Naive Bayes aggregates and a list of labels. You can use the lower levels functions (explained later) to generate the required set of aggregates. Example of a possible query is:
 
 ```
 select linregr_train(
@@ -222,6 +234,13 @@ select linregr_train(
 ```
 
 For QDA / Naive Bayes the query need to generate a cofactor matrix for each label, and both the cofactor matrices and labels need to be inserted in arrays. 
+
+###Functions
+
+* `to_relation`: Given a tuple, creates a Triple aggregate (Regression/LDA/QDA models)
+* `to_nb_aggregates`: Given a tuple, creates a Naive Bayes (Naive Bayes)
+* `SUM`: Sum aggregate function, between triples or Naive Bayes aggregates
+* `*`: Multiplies two triples/Naive Bayes aggregates
 
 ### Quickstart
 `quickstart.py` will automatically compare the results of SKLearn and our library over iris for Linear Regression, LDA, QDA and Naive Bayes. Requires SKLearn, Pandas and psycopg2. Defaults PostgreSQL parameters are
@@ -264,15 +283,15 @@ MICE_...(
     )
 ```
 
-* input\_table\_name: table with missing values
-* output\_table\_name: name of the resulting table with imputed values
-* continuous\_columns: continuous columns in the model
-* categorical\_columns: categorical columns in the model
-* continuous\_columns\_null: continuous columns with missing values
-* categorical\_columns\_null: categorical columns with missing values
-* fillfactor fillfactor of the output table. Between 0 and 100. Usually inverse proportion of the tuples with missing values.
-* iterations MICE iterations
-* add_noise if true uses stochastic linear regression, otherwise linear regression
+* `input_table_name`: table with missing values
+* `output_table_name`: name of the resulting table with imputed values
+* `continuous_columns`: continuous columns in the model
+* `categorical_columns`: categorical columns in the model
+* `continuous_columns_null`: continuous columns with missing values
+* `categorical_columns_null`: categorical columns with missing values
+* `fillfactor` fillfactor of the output table. Between 0 and 100. Usually inverse proportion of the tuples with missing values. Affects the number of HOT updates in PostgreSQL.
+* `iterations` MICE iterations
+* `add_noise` if true uses stochastic linear regression, otherwise linear regression
 
 ### Imputation Quickstart
 
