@@ -76,7 +76,7 @@ Make sure the order of parameters is the same inside train and predict functions
 
 A LR model can be trained with the `linregr_train` function
 
-```
+```sql
 linregr_train(
 	num. columns text[],
 	cat. columns text[], 
@@ -90,7 +90,7 @@ linregr_train(
 ```
 Example: train over `iris_train`, with columns `s_length`, `s_width`, `p_length`, `p_width` numerical and class categorical. The label is `s_length`
 
-```
+```sql
 train_params := select linregr_train(
 	ARRAY['s_length', 's_width', 'p_length', 'p_width'], 
 	ARRAY['class'],
@@ -102,7 +102,7 @@ This will return an array of parameters (float8).
 
 You can then use the predict function to generate predictions inside SQL queries:
 
-```
+```sql
 linregr_predict(
          params_array float8[],
          cont_columns float8[],
@@ -114,7 +114,7 @@ You can set add_noise to true only if you have computed the variance in the trai
 
 Example:
 
-```
+```sql
 select linregr_predict(
 	train_params, ARRAY[ s_width, p_length, p_width ]::float8[],
 	ARRAY[ target ]::int4[],
@@ -126,7 +126,7 @@ from iris_test
 
 A LDA model can be trained with the `lda_train` function
 
-```
+```sql
 lda_train(
 	continuous_columns text[],
 	categorical_columns text[],
@@ -141,7 +141,7 @@ This will return an array of parameters.
 
 You can then use the predict function to generate predictions inside SQL queries:
 
-```
+``` sql
 lda_predict(
          params_array float8[],
          cont_columns float8[],
@@ -153,7 +153,7 @@ lda_predict(
 
 A QDA model can be trained with the `qda_train` function
 
-```
+```sql
 qda_train(
 	continuous_columns text[],
 	categorical_columns text[],
@@ -167,7 +167,7 @@ This will return an array of parameters.
 
 You can then use the predict function to generate predictions inside SQL queries:
 
-```
+```sql
 qda_predict(
          params_array float8[],
          cont_columns float8[],
@@ -179,7 +179,7 @@ qda_predict(
 
 A Naive Bayes model can be trained with the `nb_train` function
 
-```
+```sql
 nb_train(
 	continuous_columns text[],
 	categorical_columns text[],
@@ -193,7 +193,7 @@ This will return an array of parameters.
 
 You can then use the predict function to generate predictions inside SQL queries:
 
-```
+```sql
 qda_predict(
          params_array float8[],
          cont_columns float8[],
@@ -207,7 +207,7 @@ You can train a model over multiple tables in two ways:
 
 * Compute the join and then train the model: use a join query instead of specifying a table name in the previous functions. Example:
 
-```
+```sql
    train_params := select linregr_train(
 	ARRAY['con. columns'], ARRAY['cat. columns'],
 	'(SELECT con. columns, cat. columns
@@ -217,7 +217,7 @@ You can train a model over multiple tables in two ways:
 ```
 * Train without joining the tables: The previous functions accept an extra query string at the end. You need to write a query which computes a cofactor matrix over the relations. For Linear Regression and LDA, just return a single cofactor matrix, while for Naive Bayes and QDA the query must return a list of cofactors/Naive Bayes aggregates and a list of labels. You can use the lower levels functions (explained later) to generate the required set of aggregates. Example of a possible query is:
 
-```
+```sql
 select linregr_train(
 	ARRAY[''], ARRAY[''],'', 1, 0.001, 0, 100000,
 	false, 
@@ -235,7 +235,7 @@ select linregr_train(
 
 For QDA / Naive Bayes the query need to generate a cofactor matrix for each label, and both the cofactor matrices and labels need to be inserted in arrays. 
 
-###Functions
+### Functions
 
 * `to_relation`: Given a tuple, creates a Triple aggregate (Regression/LDA/QDA models)
 * `to_nb_aggregates`: Given a tuple, creates a Naive Bayes (Naive Bayes)
